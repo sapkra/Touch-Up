@@ -78,29 +78,76 @@ struct DigitizerMappingView: View {
 
                 Spacer(minLength: 8)
 
+                matchWarning(for: digitizer)
                 screenPicker(for: digitizer)
             }
         }
     }
 
+    /// Surfaces how confidently the mapping resolved. `ScreenMatch` has always been computed
+    /// and never shown, so a mapping that is really a guess looked identical to a confirmed
+    /// one — and an unresolvable one looked identical to a working setup that ignores touches.
+    @ViewBuilder
+    private func matchWarning(for digitizer: Digitizer) -> some View {
+        let match = model.resolvedMapping(forLocationID: digitizer.locationID).match
+
+        if let explanation = Self.explanation(for: match) {
+            Image(systemName: match == .unmapped ? "exclamationmark.triangle.fill" : "questionmark.circle")
+                .foregroundColor(match == .unmapped ? .orange : .secondary)
+                .help(explanation)
+        }
+    }
+
+    private static func explanation(for match: ScreenMatch) -> String? {
+        switch match {
+        case .exact:
+            return nil
+        case .idFallback:
+            return "Matched by position in the display arrangement rather than by identity. If touches land on the wrong display, pick it again here."
+        case .implicit:
+            return "No display has been assigned yet, so touches go to the most recently connected one. Pick a display to make the assignment stick."
+        case .unmapped:
+            return "No display could be resolved for this touchscreen, so touches cannot be turned into screen coordinates and nothing will happen when you touch it."
+        }
+    }
+
+
     @ViewBuilder
     private func screenPicker(for digitizer: Digitizer) -> some View {
-        let selection = Binding {
-            model.resolvedMapping(forLocationID: digitizer.locationID).screen?.uuid ?? ""
-        } set: { uuid in
-            model.assignScreen(model.connectedScreens.first { $0.uuid == uuid }, toDigitizer: digitizer.locationID)
-        }
+        if model.connectedScreens.isEmpty {
+            // A Picker with no options renders as a blank, unusable control. That reads as "this
+            // app does not support my hardware" when what it means is "macOS is not reporting a
+            // display to point at" — the misunderstanding behind #4 and #11.
+            Text("No displays detected")
+                .font(.caption)
+                .foregroundColor(.secondary)
 
-        Picker(selection: selection) {
-            ForEach(model.connectedScreens) { screen in
-                Text(screen.name).tag(screen.uuid)
+        } else {
+            let mapping = model.resolvedMapping(forLocationID: digitizer.locationID)
+
+            let selection = Binding {
+                mapping.screen?.uuid ?? ""
+            } set: { uuid in
+                model.assignScreen(model.connectedScreens.first { $0.uuid == uuid }, toDigitizer: digitizer.locationID)
             }
-        } label: {
-            EmptyView()
+
+            Picker(selection: selection) {
+                // Without a row for it, an unresolved mapping selects a tag that does not exist
+                // and the menu simply draws empty.
+                if mapping.screen == nil {
+                    Text("Not assigned").tag("")
+                }
+
+                ForEach(model.connectedScreens) { screen in
+                    Text(screen.name).tag(screen.uuid)
+                }
+            } label: {
+                EmptyView()
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .fixedSize()
         }
-        .labelsHidden()
-        .pickerStyle(.menu)
-        .fixedSize()
     }
 
 
