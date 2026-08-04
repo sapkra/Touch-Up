@@ -45,6 +45,10 @@ typedef struct {
     CFIndex                 contactCount;
     CFIndex                 hybridOffset;
     Boolean                 touchscreenUsesHybridMode;
+
+    /// Set once we have complained about this interface reporting unusable coordinates, so the
+    /// warning does not repeat at report rate and flood the diagnostics transcript.
+    Boolean                 didWarnAboutMissingAxes;
 } HIDDeviceState;
 
 static HIDDeviceState gDevices[kMaxTouchscreens];
@@ -557,49 +561,68 @@ void PrintTouchCollection(HIDDeviceState *device, IOHIDElementRef collection) {
 
 
 /**
+ Normalises an axis value against its element's logical range, into 0...1.
+
+ Returns false when the descriptor cannot support the conversion, i.e. when it declares an
+ empty logical range. Dividing by that range regardless yielded infinity or NaN, which then
+ travelled all the way to a synthesized mouse event.
+ */
+static Boolean NormalizedAxisValue(IOHIDElementRef element, CFIndex value, CGFloat *outNormalized) {
+    CGFloat min = (CGFloat)IOHIDElementGetLogicalMin(element);
+    CGFloat max = (CGFloat)IOHIDElementGetLogicalMax(element);
+
+    if (max <= min) {
+        return false;
+    }
+
+    // Note there is deliberately no `+ min` here. It used to be added back after dividing,
+    // which is a no-op for the overwhelmingly common min == 0 and an offset for everything
+    // else, pushing the result outside 0...1 on any device with a non-zero logical minimum.
+    *outNormalized = ((CGFloat)value - min) / (max - min);
+    return true;
+}
+
+
+/**
  Dispatches touch data for the given collection, but only if all values needed were received
  */
 
 void DispatchTouchDataForCollection(HIDDeviceState *device, IOHIDElementRef collection) {
-    
+
     CFArrayRef children = IOHIDElementGetChildren(collection);
-    
+
     CGFloat x = -1;
     CGFloat y = -1;
-    
+    Boolean hasX = false;
+    Boolean hasY = false;
+
     CFIndex contactID = 0;
     CFIndex tipSwitch = 0;
     CFIndex isValid = 0;
-    
+
     CFIndex width   = kCFNotFound;
     CFIndex height  = kCFNotFound;
     CFIndex azimuth = kCFNotFound;
-    
+
     // get stored values of all touches
     for (CFIndex i=0; i<CFArrayGetCount(children); i++) {
         IOHIDElementRef element = (IOHIDElementRef)CFArrayGetValueAtIndex(children, i);
-        
+
         CFIndex page = IOHIDElementGetUsagePage(element);
         CFIndex usage = IOHIDElementGetUsage(element);
         CFIndex value = ValueOfElement(device, element);
-        
+
         if (value != kCFNotFound) {
             if (page == kHIDPage_GenericDesktop) {
                 if (usage == kHIDUsage_GD_X) {
-                    CGFloat min = (CGFloat)IOHIDElementGetLogicalMin(element);
-                    CGFloat max = (CGFloat)IOHIDElementGetLogicalMax(element);
-                    CGFloat curr = (CGFloat)value;
-                    x = ( (curr - min) / (max - min) ) + min;
+                    hasX = NormalizedAxisValue(element, value, &x);
                 }
-                
+
                 else if (usage == kHIDUsage_GD_Y) {
-                    CGFloat min = (CGFloat)IOHIDElementGetLogicalMin(element);
-                    CGFloat max = (CGFloat)IOHIDElementGetLogicalMax(element);
-                    CGFloat curr = (CGFloat)value;
-                    y = ( (curr - min) / (max - min) ) + min;
+                    hasY = NormalizedAxisValue(element, value, &y);
                 }
             } //kHIDPage_GenericDesktop
-            
+
             else if (page == kHIDPage_Digitizer) {
                 if (usage == kHIDUsage_Dig_ContactIdentifier) {
                     contactID = value;
@@ -617,6 +640,27 @@ void DispatchTouchDataForCollection(HIDDeviceState *device, IOHIDElementRef coll
             } // kHIDPage_Digitizer
         }
     }
+    // Honour what this function has always claimed to do. Without the check, a collection
+    // carrying no usable X/Y still dispatched, at the sentinel (-1, -1) — and the letterbox
+    // correction downstream clamps to 0...1, turning that into a perfectly plausible (0, 0).
+    // The result is a screen whose every touch lands in the top-left corner with nothing
+    // anywhere to say why, which is what "clicks only register at 0,0" is.
+    //
+    // `ignoreOriginTouches` cannot cover this: it compares the raw digitizer point against
+    // zero, before the clamp is what produces the zero.
+    if (!hasX || !hasY) {
+        if (!device->didWarnAboutMissingAxes) {
+            device->didWarnAboutMissingAxes = true;
+            DiagLog("WARNING: a touch collection of %#010x reported no usable %s%s%s.\n"
+                    "         Its reports are being dropped rather than sent to the corner.\n"
+                    "         Either the descriptor omits the axis or it declares an empty\n"
+                    "         logical range (min >= max).\n",
+                    device->locationID,
+                    hasX ? "" : "X", (!hasX && !hasY) ? " or " : "", hasY ? "" : "Y");
+        }
+        return;
+    }
+
     TouchInputManagerUpdateTouchPosition(gTouchManager, device->locationID, contactID, x, y, (int)tipSwitch, (int)isValid);
     
     //    if (width != kCFNotFound && height != kCFNotFound && azimuth != kCFNotFound) {
