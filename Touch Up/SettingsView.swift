@@ -11,7 +11,10 @@ import TouchUpCore
 struct SettingsView: View {
     
     @ObservedObject var model: TouchUp
-    
+
+    @State private var didCopyDiagnostics = false
+
+
     var welcomeBanner: some View {
         Group {
             VStack(alignment: .leading, spacing: 6) {
@@ -113,7 +116,32 @@ struct SettingsView: View {
             Toggle(isOn: $model.areAdditionalDigitizerRotationSettingsVisible) {
                 SettingsExplanationLabel(labels: model.uiLabels(for: \.areAdditionalDigitizerRotationSettingsVisible))
             }
+
+            diagnosticsButton
         }
+    }
+
+
+    var diagnosticsButton: some View {
+        HStack(alignment: .top) {
+            SettingsExplanationLabel(labels: ("Diagnostics",
+                                              "Copies a description of your touchscreen, your displays and how they were matched up. Paste it into a GitHub issue when reporting a device that does not work."))
+
+            Spacer(minLength: 8)
+
+            Button {
+                model.copyDiagnosticsToClipboard()
+                didCopyDiagnostics = true
+            } label: {
+                Label(didCopyDiagnostics ? "Copied" : "Copy",
+                      systemImage: didCopyDiagnostics ? "checkmark" : "doc.on.doc")
+            }
+            .disabled(didCopyDiagnostics)
+        }
+        // Re-arm as soon as anything about the devices changes, so a second report after
+        // re-plugging is one click away.
+        .onChange(of: model.connectedDigitizers) { _ in didCopyDiagnostics = false }
+        .onChange(of: model.connectedScreens) { _ in didCopyDiagnostics = false }
     }
     
     

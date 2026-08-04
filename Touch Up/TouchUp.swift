@@ -76,6 +76,41 @@ class TouchUp: NSObject, ObservableObject {
     }
 
     
+    /// A copyable snapshot for bug reports: build and hardware identity, then everything the
+    /// core knows about the connected digitizers, the screens, and how they were mapped.
+    /// The hardware model is included because it is the first thing asked for in practice —
+    /// the tracker is full of "Mac mini M4 + <panel>" reports where neither half was stated.
+    var diagnosticsReport: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+
+        var report = "Touch Up \(version) (\(build))\n"
+        report += "macOS \(ProcessInfo.processInfo.operatingSystemVersionString)\n"
+        report += "Hardware \(Self.hardwareModelIdentifier ?? "unknown")\n"
+        report += "Accessibility access: \(isAccessibilityAccessGranted ? "granted" : "NOT GRANTED")\n\n"
+        report += touchManager.diagnosticsReport()
+
+        return report
+    }
+
+    /// e.g. "Mac16,8". `sysctlbyname` is the only way to get this; there is no AppKit API.
+    private static var hardwareModelIdentifier: String? {
+        var size = 0
+        guard sysctlbyname("hw.model", nil, &size, nil, 0) == 0, size > 0 else { return nil }
+
+        var bytes = [CChar](repeating: 0, count: size)
+        guard sysctlbyname("hw.model", &bytes, &size, nil, 0) == 0 else { return nil }
+
+        return String(cString: bytes)
+    }
+
+    func copyDiagnosticsToClipboard() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(diagnosticsReport, forType: .string)
+    }
+
+
     func checkAccessibilityAccessGranted() {
         let checkOptPrompt = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as NSString
         self.isAccessibilityAccessGranted = AXIsProcessTrustedWithOptions([checkOptPrompt: true] as CFDictionary?)

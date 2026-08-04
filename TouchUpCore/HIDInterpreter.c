@@ -99,6 +99,8 @@ static void DiagLog(const char *format, ...) {
     if (remaining > 1) {
         int written = vsnprintf(gDiagnostics + gDiagnosticsLength, remaining, format, args);
         if (written < 0) {
+            // On failure the written contents are undefined; keep the transcript a valid string.
+            gDiagnostics[gDiagnosticsLength] = '\0';
             gDiagnosticsDidTruncate = true;
         } else if ((size_t)written >= remaining) {
             // vsnprintf reports what it *would* have written; the buffer is now full.

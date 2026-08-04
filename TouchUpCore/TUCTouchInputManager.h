@@ -81,6 +81,17 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (void)triggerSystemAccessibilityAccessAlert;
 
+
+/**
+ A human-readable snapshot intended to be pasted into a bug report: the screens and their
+ geometry, how each digitizer resolved to one of them, the active gesture parameters, and the
+ full HID discovery transcript.
+
+ Contains only hardware description and settings — no user content — so it is safe to put on
+ the clipboard.
+ */
+- (NSString *)diagnosticsReport;
+
 @end
 
 NS_ASSUME_NONNULL_END

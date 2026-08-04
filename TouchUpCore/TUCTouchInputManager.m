@@ -841,6 +841,60 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
 }
 
 
+- (NSString *)diagnosticsReport {
+    NSMutableString *report = [NSMutableString string];
+
+    [report appendString:@"───── Screens ─────\n"];
+    NSArray<TUCScreen *> *screens = [TUCScreen allScreens];
+    if (screens.count == 0) {
+        [report appendString:@"(none)\n"];
+    }
+    for (TUCScreen *screen in screens) {
+        [report appendFormat:@"%@\n", [screen debugDescription]];
+    }
+
+    // Which screen each digitizer ended up driving. An unresolved mapping means touches are
+    // being converted against no screen at all, which looks identical to "no touches" from
+    // the outside.
+    [report appendString:@"\n───── Digitizer mapping ─────\n"];
+    if (self.frameIDsByLocationID.count == 0) {
+        [report appendString:@"(no digitizer connected)\n"];
+    }
+    for (NSNumber *key in self.frameIDsByLocationID) {
+        uint32_t locationID = key.unsignedIntValue;
+        TUCScreen *screen = [self touchscreenForLocationID:locationID];
+        CGFloat extraRotation = (self.delegate != nil)
+            ? [self.delegate digitizerRotationForLocationID:locationID] : 0;
+
+        [report appendFormat:@"digitizer %#010x -> %@   (extra rotation %+.0f°)\n",
+         locationID,
+         screen ? screen.name : @"UNRESOLVED - no screen could be assigned",
+         extraRotation];
+    }
+
+    [report appendString:@"\n───── Parameters ─────\n"];
+    [report appendFormat:@"postMouseEvents:      %@\n", self.postMouseEvents ? @"YES" : @"NO"];
+    [report appendFormat:@"tapTolerance:         %.2f mm\n", self.tapTolerance];
+    [report appendFormat:@"holdDuration:         %.3f s\n", self.holdDuration];
+    [report appendFormat:@"doubleClickTolerance: %.2f mm\n", self.doubleClickTolerance];
+    [report appendFormat:@"errorResistance:      %ld reports\n", (long)self.errorResistance];
+    [report appendFormat:@"ignoreOriginTouches:  %@\n", self.ignoreOriginTouches ? @"YES" : @"NO"];
+
+    [report appendString:@"\n───── HID discovery ─────\n"];
+    const char *transcript = HIDDiagnostics();
+    if (transcript == NULL || transcript[0] == '\0') {
+        [report appendString:@"(empty - no touch device was matched by the HID manager)\n"];
+    } else {
+        [report appendFormat:@"%s", transcript];
+    }
+    if (HIDDiagnosticsDidTruncate()) {
+        [report appendString:@"\n[transcript truncated: capacity reached]\n"];
+    }
+
+    return report;
+}
+
+
 
 #pragma mark - Bridge calls of C Header to Objective-C
 
