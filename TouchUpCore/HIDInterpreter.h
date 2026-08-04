@@ -20,4 +20,16 @@ void CloseHIDManager(void);
 /// Applies to currently-connected and future devices. Pen interfaces stay shared.
 void SetTouchDevicesSeized(bool seize);
 
+/// Everything the interpreter has discovered about the connected devices: the HID element
+/// tree, which interface was accepted for each screen and why, and any errors along the way.
+/// Owned by the interpreter and valid until the next device event — copy it, don't retain it.
+const char *HIDDiagnostics(void);
+
+/// Whether the transcript hit its capacity and is missing its tail.
+bool HIDDiagnosticsDidTruncate(void);
+
+/// Drops the transcript so a fresh one can be gathered (e.g. before asking the user to
+/// re-plug a device).
+void ResetHIDDiagnostics(void);
+
 #endif /* HIDInterpreter_h */

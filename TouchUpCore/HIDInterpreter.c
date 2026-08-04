@@ -14,6 +14,8 @@
 
 #include <CoreGraphics/CoreGraphics.h>
 
+#include <stdarg.h>
+
 #pragma mark - Per-Device State
 
 #define kMaxTouchscreens 4
@@ -61,6 +63,137 @@ static IOHIDManagerRef gHidManager;
 static Boolean gSeizeTouchDevices = false;
 
 
+#pragma mark - Diagnostics Transcript
+
+/**
+ A bounded in-memory transcript of what the interpreter discovers about the connected HID
+ devices.
+
+ All of this was always produced — as `printf` to stdout — but an app launched from Finder has
+ no stdout anybody can read, so in practice the information never reached the one person who
+ needed it. That is why almost every device-specific report on the tracker stalls on "how can
+ I help you debug this?". Capturing the same output makes it copyable from the settings window.
+
+ Written only from the HID callbacks, which all run on the main run loop, so no locking.
+ */
+
+#define kDiagnosticsCapacity (128 * 1024)
+
+static char    gDiagnostics[kDiagnosticsCapacity];
+static size_t  gDiagnosticsLength = 0;
+static Boolean gDiagnosticsDidTruncate = false;
+
+static void DiagLog(const char *format, ...) __printflike(1, 2);
+
+static void DiagLog(const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+
+    // Still mirrored to stdout, which is worth having when running from Xcode.
+    va_list stdoutArgs;
+    va_copy(stdoutArgs, args);
+    vprintf(format, stdoutArgs);
+    va_end(stdoutArgs);
+
+    size_t remaining = kDiagnosticsCapacity - gDiagnosticsLength;
+    if (remaining > 1) {
+        int written = vsnprintf(gDiagnostics + gDiagnosticsLength, remaining, format, args);
+        if (written < 0) {
+            gDiagnosticsDidTruncate = true;
+        } else if ((size_t)written >= remaining) {
+            // vsnprintf reports what it *would* have written; the buffer is now full.
+            gDiagnosticsLength = kDiagnosticsCapacity - 1;
+            gDiagnosticsDidTruncate = true;
+        } else {
+            gDiagnosticsLength += (size_t)written;
+        }
+    } else {
+        gDiagnosticsDidTruncate = true;
+    }
+
+    va_end(args);
+}
+
+const char *HIDDiagnostics(void) {
+    return gDiagnostics;
+}
+
+bool HIDDiagnosticsDidTruncate(void) {
+    return gDiagnosticsDidTruncate;
+}
+
+void ResetHIDDiagnostics(void) {
+    gDiagnostics[0] = '\0';
+    gDiagnosticsLength = 0;
+    gDiagnosticsDidTruncate = false;
+}
+
+
+/// Copies a string device property, or "-" when the device does not publish it.
+static void CopyDeviceStringProperty(IOHIDDeviceRef dev, CFStringRef key, char *out, size_t outSize) {
+    out[0] = '\0';
+
+    CFTypeRef value = IOHIDDeviceGetProperty(dev, key);
+    if (value && CFGetTypeID(value) == CFStringGetTypeID()) {
+        CFStringGetCString((CFStringRef)value, out, (CFIndex)outSize, kCFStringEncodingUTF8);
+    }
+
+    if (out[0] == '\0') {
+        snprintf(out, outSize, "-");
+    }
+}
+
+
+/// Formats a numeric device property as hex, or "-" when the device does not publish it.
+static void CopyDeviceHexProperty(IOHIDDeviceRef dev, CFStringRef key, char *out, size_t outSize) {
+    CFTypeRef value = IOHIDDeviceGetProperty(dev, key);
+    long number = 0;
+
+    if (value && CFGetTypeID(value) == CFNumberGetTypeID()
+        && CFNumberGetValue((CFNumberRef)value, kCFNumberLongType, &number)) {
+        snprintf(out, outSize, "%#04lx", number);
+    } else {
+        snprintf(out, outSize, "-");
+    }
+}
+
+
+/**
+ Records what this HID interface says about itself. The usage page/usage pair is the most
+ valuable line: a panel that reports usage 0x05 (TouchPad) rather than 0x04 (TouchScreen) is
+ the one macOS drives as a trackpad, and knowing which of the two a device claims to be
+ explains most "it behaves like a giant trackpad" reports without any guesswork.
+ */
+static void DiagLogDeviceIdentity(IOHIDDeviceRef dev, uint32_t locationID, CFIndex contactCollections) {
+    char product[128], manufacturer[128], transport[64], serial[128];
+    char vendorID[16], productID[16], usagePage[16], usage[16];
+
+    CopyDeviceStringProperty(dev, CFSTR(kIOHIDProductKey),      product,      sizeof(product));
+    CopyDeviceStringProperty(dev, CFSTR(kIOHIDManufacturerKey), manufacturer, sizeof(manufacturer));
+    CopyDeviceStringProperty(dev, CFSTR(kIOHIDTransportKey),    transport,    sizeof(transport));
+    CopyDeviceStringProperty(dev, CFSTR(kIOHIDSerialNumberKey), serial,       sizeof(serial));
+
+    CopyDeviceHexProperty(dev, CFSTR(kIOHIDVendorIDKey),          vendorID,  sizeof(vendorID));
+    CopyDeviceHexProperty(dev, CFSTR(kIOHIDProductIDKey),         productID, sizeof(productID));
+    CopyDeviceHexProperty(dev, CFSTR(kIOHIDPrimaryUsagePageKey),  usagePage, sizeof(usagePage));
+    CopyDeviceHexProperty(dev, CFSTR(kIOHIDPrimaryUsageKey),      usage,     sizeof(usage));
+
+    DiagLog("\n===== HID interface at locationID %#010x =====\n", locationID);
+    DiagLog("  product:    %s\n", product);
+    DiagLog("  vendor:     %s (%s), product %s\n", manufacturer, vendorID, productID);
+    DiagLog("  serial:     %s\n", serial);
+    DiagLog("  transport:  %s\n", transport);
+    DiagLog("  usage:      page %s, usage %s\n", usagePage, usage);
+    DiagLog("  contact collections: %ld\n", contactCollections);
+
+    if (contactCollections == 0) {
+        DiagLog("  WARNING: no logical collection here reports a ContactIdentifier, so no touch\n"
+                "           data can be extracted from this interface. If this is the only\n"
+                "           interface for the screen, it will connect but never report a touch.\n");
+    }
+}
+
+
 #pragma mark - Device State Management
 
 
@@ -90,7 +223,7 @@ HIDDeviceState* RegisteredDeviceForLocationID(uint32_t locationID) {
 
 HIDDeviceState* AllocateDeviceState(IOHIDDeviceRef device, uint32_t locationID) {
     if (gDeviceCount >= kMaxTouchscreens) {
-        fprintf(stderr, "Maximum number of touchscreens (%d) reached.\n", kMaxTouchscreens);
+        DiagLog("Maximum number of touchscreens (%d) reached.\n", kMaxTouchscreens);
         return NULL;
     }
 
@@ -151,11 +284,11 @@ void DeallocateDeviceState(IOHIDDeviceRef device) {
 
 void PrintAddress(UInt8 *ptr, UInt64 length) {
     for (int i=0; i<length; i++) {
-        printf("%02x ", ptr[i]);
-        if ((i+1)%8 == 0) printf("  ");
-        if ((i+1)%32 == 0) printf("\n");
+        DiagLog("%02x ", ptr[i]);
+        if ((i+1)%8 == 0) DiagLog("  ");
+        if ((i+1)%32 == 0) DiagLog("\n");
     }
-    printf("\n");
+    DiagLog("\n");
 }
 
 
@@ -203,7 +336,7 @@ void PrintInput(IOHIDValueRef inHIDValue) {
     CFIndex  lMin = IOHIDElementGetLogicalMin(elem);
     CFIndex lMax = IOHIDElementGetLogicalMax(elem);
     
-    printf("%u\t| %#02lx %s\t| %#02lx %s\t|%8ld\t(%ld-%ld)\n", cookie, page, pageDescr, usage, usageDescr, value, lMin, lMax);
+    DiagLog("%u\t| %#02lx %s\t| %#02lx %s\t|%8ld\t(%ld-%ld)\n", cookie, page, pageDescr, usage, usageDescr, value, lMin, lMax);
 }
 
 
@@ -306,7 +439,7 @@ void IdentifyElements(HIDDeviceState *device, IOHIDElementRef anyElement, Boolea
     CFIndex numChildren = CFArrayGetCount(children);
     
     if (printTree) {
-        printf("# parent (type %u) has %ld children:\n", type, numChildren);
+        DiagLog("# parent (type %u) has %ld children:\n", type, numChildren);
     }
     
     
@@ -322,7 +455,7 @@ void IdentifyElements(HIDDeviceState *device, IOHIDElementRef anyElement, Boolea
             CFArrayAppendValue(device->touchCollectionElements, element);
             
             if (printTree) {
-                printf(" > Logical collection %ld\n", i);
+                DiagLog(" > Logical collection %ld\n", i);
                 CFArrayRef grandchildren = IOHIDElementGetChildren(element);
                 for( CFIndex j=0; j<CFArrayGetCount(grandchildren); j++) {
                     IOHIDElementRef gch = (IOHIDElementRef)CFArrayGetValueAtIndex(grandchildren, j);
@@ -330,7 +463,7 @@ void IdentifyElements(HIDDeviceState *device, IOHIDElementRef anyElement, Boolea
                     CFIndex usage = IOHIDElementGetUsage(gch);
                     CFIndex cookie= IOHIDElementGetCookie(gch);
                     
-                    printf("    > %#02lx %#02lx  [%ld]\n", page, usage, cookie);
+                    DiagLog("    > %#02lx %#02lx  [%ld]\n", page, usage, cookie);
                 }
             }
             
@@ -338,20 +471,20 @@ void IdentifyElements(HIDDeviceState *device, IOHIDElementRef anyElement, Boolea
         
         else if (page == kHIDPage_Digitizer && usage == kHIDUsage_Dig_ContactCount) {
             if (printTree) {
-                printf(" > Contact Count\n");
+                DiagLog(" > Contact Count\n");
             }
         }
         
         else if (page == kHIDPage_Digitizer && usage == kHIDUsage_Dig_RelativeScanTime) {
             device->scanTimeElement = element;
             if (printTree) {
-                printf(" > Scan Time\n");
+                DiagLog(" > Scan Time\n");
             }
         }
         
         else {
             if (printTree) {
-                printf(" > %#02lx %#02lx\n", page, usage);
+                DiagLog(" > %#02lx %#02lx\n", page, usage);
             }
         }
     }
@@ -415,9 +548,9 @@ void PrintTouchCollection(HIDDeviceState *device, IOHIDElementRef collection) {
         
         
         
-        printf("[%ld]\t%#02lx\t%#02lx %s\t %8ld\n", (long)cookie, page, usage, usageDescr,  value);
+        DiagLog("[%ld]\t%#02lx\t%#02lx %s\t %8ld\n", (long)cookie, page, usage, usageDescr,  value);
     }
-    printf("\n");
+    DiagLog("\n");
 }
 
 
@@ -539,7 +672,7 @@ static void ApplySeizeState(HIDDeviceState *state) {
         if (r == kIOReturnSuccess) {
             state->seized = true;
         } else {
-            fprintf(stderr, "Failed to seize device 0x%08x (IOReturn 0x%08x)\n", state->locationID, r);
+            DiagLog("Failed to seize device 0x%08x (IOReturn 0x%08x)\n", state->locationID, r);
         }
     } else if (!gSeizeTouchDevices && state->seized) {
         IOHIDDeviceClose(state->device, kIOHIDOptionsTypeSeizeDevice);
@@ -691,9 +824,6 @@ static void Handle_DeviceMatchingCallback(
     void *          inSender,        // the IOHIDManagerRef for the new device
     IOHIDDeviceRef  inIOHIDDeviceRef // the new HID device
 ) {
-    printf("%s(context: %p, result: %d, sender: %p, device: %p).\n",
-           __PRETTY_FUNCTION__, inContext, inResult, inSender, (void*) inIOHIDDeviceRef);
-
     // read the location ID for this device
     CFNumberRef locationRef = IOHIDDeviceGetProperty(inIOHIDDeviceRef, CFSTR(kIOHIDLocationIDKey));
     uint32_t locationID = 0;
@@ -701,29 +831,32 @@ static void Handle_DeviceMatchingCallback(
         CFNumberGetValue(locationRef, kCFNumberSInt32Type, &locationID);
     }
 
-    printf("Touchscreen connected with locationID: 0x%08x\n", locationID);
-
     // A combo digitizer exposes several interfaces under one locationID. Keep only the one
     // that actually carries multitouch: the interface with the most contact collections.
     CFIndex contactCount = CountContactCollections(inIOHIDDeviceRef);
     HIDDeviceState *existing = RegisteredDeviceForLocationID(locationID);
 
+    DiagLogDeviceIdentity(inIOHIDDeviceRef, locationID, contactCount);
+
     if (existing == NULL) {
+        DiagLog("  -> accepted as the touchscreen for %#010x\n", locationID);
         if (RegisterTouchDevice(inIOHIDDeviceRef, locationID, contactCount)) {
             TouchInputManagerDidConnectTouchscreen(gTouchManager, locationID);
+        } else {
+            DiagLog("  -> FAILED to allocate device state; interface not driven\n");
         }
     } else if (contactCount > existing->contactCollectionCount) {
         // A better interface for an already-connected screen arrived (connect order is not
         // deterministic). Swap to it without bothering the upper layer — the locationID,
         // which is all the upper layer keys on, stays connected throughout.
-        printf("Switching primary interface for 0x%08x: %ld -> %ld contact collections\n",
+        DiagLog("  -> switching primary interface for %#010x: %ld -> %ld contact collections\n",
                locationID, existing->contactCollectionCount, contactCount);
         IOHIDDeviceRef oldDev = existing->device;
         IOHIDDeviceRegisterInputValueCallback(oldDev, NULL, NULL);
         DeallocateDeviceState(oldDev);
         RegisterTouchDevice(inIOHIDDeviceRef, locationID, contactCount);
     } else {
-        printf("Ignoring secondary interface for 0x%08x (%ld <= %ld contact collections)\n",
+        DiagLog("  -> ignored as a secondary interface of %#010x (%ld <= %ld contact collections)\n",
                locationID, contactCount, existing->contactCollectionCount);
     }
 }   // Handle_DeviceMatchingCallback
@@ -737,9 +870,6 @@ static void Handle_RemovalCallback(
                                    void *         inSender,        // the IOHIDManagerRef for the device being removed
                                    IOHIDDeviceRef inIOHIDDeviceRef // the removed HID device
 ) {
-    printf("%s(context: %p, result: %d, sender: %p, device: %p).\n",
-           __PRETTY_FUNCTION__, inContext, inResult, inSender, (void*) inIOHIDDeviceRef);
-    
     // Only the interface we actually registered as the touchscreen has state. Secondary
     // interfaces we ignored at match time have none, so their removal is a no-op and must
     // not tell the upper layer the screen went away while the primary is still present.
@@ -747,7 +877,7 @@ static void Handle_RemovalCallback(
     if (!device) return;
 
     uint32_t locationID = device->locationID;
-    printf("Touchscreen disconnected with locationID: 0x%08x\n", locationID);
+    DiagLog("\nTouchscreen disconnected at locationID %#010x\n", locationID);
 
     DeallocateDeviceState(inIOHIDDeviceRef);
 
@@ -783,15 +913,15 @@ static CFMutableDictionaryRef CreateDeviceMatchingDictionary(UInt32 inUsagePage,
                                              CFSTR(kIOHIDDeviceUsageKey), usageCFNumberRef);
                         CFRelease(usageCFNumberRef);
                     } else {
-                        fprintf(stderr, "%s: CFNumberCreate(usage) failed.", __PRETTY_FUNCTION__);
+                        DiagLog("%s: CFNumberCreate(usage) failed.", __PRETTY_FUNCTION__);
                     }
                 }
             } else {
-                fprintf(stderr, "%s: CFNumberCreate(usage page) failed.", __PRETTY_FUNCTION__);
+                DiagLog("%s: CFNumberCreate(usage page) failed.", __PRETTY_FUNCTION__);
             }
         }
     } else {
-        fprintf(stderr, "%s: CFDictionaryCreateMutable failed.", __PRETTY_FUNCTION__);
+        DiagLog("%s: CFDictionaryCreateMutable failed.", __PRETTY_FUNCTION__);
     }
     return result;
 }   // CreateDeviceMatchingDictionary
@@ -807,7 +937,7 @@ void OpenHIDManager(void *delegate) {
     gHidManager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
     
     if (CFGetTypeID(gHidManager) != IOHIDManagerGetTypeID()) {
-        printf("OH CRAP THIS IS NOT AN HID MANAGER");
+        DiagLog("OH CRAP THIS IS NOT AN HID MANAGER");
     }
     
     
