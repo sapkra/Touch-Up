@@ -344,13 +344,18 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
                 
                 if (   !CGPointEqualToPoint(trajectoryA, CGPointZero)
                     && !CGPointEqualToPoint(trajectoryB, CGPointZero)) {
-                    
+
                     if (!CGPointEqualToPoint(trajectoryA, trajectoryB)) {
                         self.identifiedMultitouchGesture = TUCCursorGesturePinch;
                     }
-                    //                    else {
-                    //                        self.identifiedMultitouchGesture = TUCCursorGestureTwoFingerDrag;
-                    //                    }
+                    // Both fingers travelling the same way is a two-finger drag — but only
+                    // claim it when the delegate actually maps it to something. Claiming a
+                    // gesture suppresses the fall-through below, so identifying one that maps
+                    // to no action would turn two fingers from "behaves like one finger" into
+                    // "does nothing at all".
+                    else if ([self actionForGesture:TUCCursorGestureTwoFingerDrag] != TUCCursorActionNone) {
+                        self.identifiedMultitouchGesture = TUCCursorGestureTwoFingerDrag;
+                    }
                 }
                 
             } else {

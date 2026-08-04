@@ -45,18 +45,22 @@ struct SettingsView: View {
         Group {
             
             let mode_ = Binding {
-                model.isClickOnLiftEnabled ? 2 : (model.isScrollingWithOneFingerEnabled ? 0 : 1)
+                if model.isClickOnLiftEnabled { return 2 }
+                if model.isDraggingWithOneFingerEnabled { return 3 }
+                return model.isScrollingWithOneFingerEnabled ? 0 : 1
             } set: { value in
                 model.isScrollingWithOneFingerEnabled = value == 0
                 model.isClickOnLiftEnabled = value == 2
+                model.isDraggingWithOneFingerEnabled = value == 3
             }
-            
+
             Picker(selection: mode_) {
                 Text("Scroll").tag(0)
                 Text("Move Cursor").tag(1)
                 Text("Point and Click").tag(2)
+                Text("Drag").tag(3)
             } label: {
-                SettingsExplanationLabel(labels: ("On Finger Drag", "Specify which action should occur when dragging one finger on the touch screen."))
+                SettingsExplanationLabel(labels: ("On Finger Drag", "Specify which action should occur when dragging one finger on the touch screen. \"Drag\" holds the mouse button down and moves it, and hands scrolling over to two fingers."))
             }
 
             

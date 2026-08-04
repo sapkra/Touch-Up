@@ -32,6 +32,7 @@ class TouchUp: NSObject, ObservableObject {
     @Published var isMagnificationEnabled = false
     @Published var isClickWindowToFrontEnabled = false
     @Published var isClickOnLiftEnabled = false
+    @Published var isDraggingWithOneFingerEnabled = false
     @Published var isPressAndHoldEnabled = false
 
     @Published var areAdditionalDigitizerRotationSettingsVisible = false
@@ -166,6 +167,7 @@ extension TouchUp {
             "isMagnificationEnabled" : true,
             "isClickWindowToFrontEnabled" : false,
             "isClickOnLiftEnabled" : false,
+            "isDraggingWithOneFingerEnabled" : false,
             "isPressAndHoldEnabled" : false,
             "areAdditionalDigitizerRotationSettingsVisible" : false
         ])
@@ -196,6 +198,7 @@ extension TouchUp {
         isMagnificationEnabled = defaults.bool(forKey: "isMagnificationEnabled")
         isClickWindowToFrontEnabled = defaults.bool(forKey: "isClickWindowToFrontEnabled")
         isClickOnLiftEnabled = defaults.bool(forKey: "isClickOnLiftEnabled")
+        isDraggingWithOneFingerEnabled = defaults.bool(forKey: "isDraggingWithOneFingerEnabled")
         isPressAndHoldEnabled = defaults.bool(forKey: "isPressAndHoldEnabled")
         areAdditionalDigitizerRotationSettingsVisible = defaults.bool(forKey: "areAdditionalDigitizerRotationSettingsVisible")
     }
@@ -215,6 +218,7 @@ extension TouchUp {
         defaults.set(isMagnificationEnabled, forKey: "isMagnificationEnabled")
         defaults.set(isClickWindowToFrontEnabled, forKey: "isClickWindowToFrontEnabled")
         defaults.set(isClickOnLiftEnabled, forKey: "isClickOnLiftEnabled")
+        defaults.set(isDraggingWithOneFingerEnabled, forKey: "isDraggingWithOneFingerEnabled")
         defaults.set(isPressAndHoldEnabled, forKey: "isPressAndHoldEnabled")
         defaults.set(areAdditionalDigitizerRotationSettingsVisible, forKey: "areAdditionalDigitizerRotationSettingsVisible")
     }
@@ -396,7 +400,9 @@ extension TouchUp: TUCTouchDelegate {
             return isPressAndHoldEnabled ? .drag : .none
 
         case .TUCCursorGestureDrag:
-            return isClickOnLiftEnabled ? .pointAndClick : (isScrollingWithOneFingerEnabled ? .scroll : .move)
+            if isClickOnLiftEnabled { return .pointAndClick }
+            if isDraggingWithOneFingerEnabled { return .drag }
+            return isScrollingWithOneFingerEnabled ? .scroll : .move
             
         case .TUCCursorGestureHoldAndDrag:
             return .drag
@@ -405,7 +411,10 @@ extension TouchUp: TUCTouchDelegate {
             return isSecondaryClickEnabled ? .secondaryClick : .none
             
         case .TUCCursorGestureTwoFingerDrag:
-            return isScrollingWithOneFingerEnabled ? .drag : .scroll
+            // Only meaningful when one finger is already dragging, where two fingers take over
+            // scrolling. Left unmapped otherwise so the core does not claim the gesture at all
+            // and two fingers keep behaving like one, exactly as they always have.
+            return isDraggingWithOneFingerEnabled ? .scroll : .none
             
         case .TUCCursorGesturePinch:
             return isMagnificationEnabled ? .magnify : .none
