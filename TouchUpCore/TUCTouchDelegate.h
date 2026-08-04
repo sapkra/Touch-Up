@@ -44,6 +44,14 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (CGFloat)digitizerRotationForLocationID:(uint32_t)locationID;
 
+/**
+ Whether the digitizer's own axes are mirrored relative to the panel it covers. Applied before
+ rotation, since it describes how the glass is wired rather than how the display is oriented.
+ Rotation alone cannot express this: all four rotations preserve handedness.
+ */
+- (BOOL)digitizerIsFlippedHorizontallyForLocationID:(uint32_t)locationID;
+- (BOOL)digitizerIsFlippedVerticallyForLocationID:(uint32_t)locationID;
+
 @end
 
 NS_ASSUME_NONNULL_END

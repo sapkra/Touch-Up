@@ -276,6 +276,24 @@ extension TouchUp {
         persistMapping(forLocationID: locationID)
     }
 
+    /// Mirrors one of the digitizer's axes (user action) and persists it immediately.
+    func setFlipped(_ isFlipped: Bool, axis: DigitizerAxis, forDigitizer locationID: HIDLocationID) {
+        guard var config = digitizerConfigs[locationID] else { return }
+        switch axis {
+        case .horizontal: config.isFlippedHorizontally = isFlipped
+        case .vertical:   config.isFlippedVertically = isFlipped
+        }
+        digitizerConfigs[locationID] = config
+        persistMapping(forLocationID: locationID)
+    }
+
+    func isFlipped(axis: DigitizerAxis, forDigitizer locationID: HIDLocationID) -> Bool {
+        switch axis {
+        case .horizontal: return digitizerConfigs[locationID]?.isFlippedHorizontally ?? false
+        case .vertical:   return digitizerConfigs[locationID]?.isFlippedVertically ?? false
+        }
+    }
+
     /// Freezes the currently resolved screen (id + uuid) and rotation of one digitizer into
     /// persistent storage. Covers both cases: an explicit user edit, and an implicit mapping
     /// that worked fine and should stick (called for all digitizers before the window closes).
@@ -351,6 +369,14 @@ extension TouchUp: TUCTouchDelegate {
 
     func digitizerRotation(forLocationID locationID: UInt32) -> CGFloat {
         digitizerConfigs[locationID]?.additionalRotation ?? 0
+    }
+
+    func digitizerIsFlippedHorizontally(forLocationID locationID: UInt32) -> Bool {
+        digitizerConfigs[locationID]?.isFlippedHorizontally ?? false
+    }
+
+    func digitizerIsFlippedVertically(forLocationID locationID: UInt32) -> Bool {
+        digitizerConfigs[locationID]?.isFlippedVertically ?? false
     }
     
     func action(for gesture: TUCCursorGesture) -> TUCCursorAction {
@@ -469,7 +495,7 @@ extension TouchUp {
         
         case \.areAdditionalDigitizerRotationSettingsVisible:
             return("Digitizer Rotation",
-                   "Adds a rotation control to each touchscreen. Only needed if the digitizer orientation in does not match your screen.")
+                   "Adds rotation and mirroring controls to each touchscreen. Only needed if the digitizer orientation does not match your screen — use mirroring if touches track correctly in the centre but run the wrong way towards the edges.")
             
         default:
             return("\(keyPath)", "")

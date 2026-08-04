@@ -632,6 +632,17 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
 - (CGPoint)convertDigitizerPointToRelativeScreenPoint:(CGPoint)devicePoint locationID:(uint32_t)locationID {
     TUCScreen *screen = [self touchscreenForLocationID:locationID];
 
+    // Mirror the glass first, while still in the digitizer's own frame: this corrects how the
+    // panel is wired, which is independent of how the display is currently oriented.
+    if (self.delegate != nil) {
+        if ([self.delegate digitizerIsFlippedHorizontallyForLocationID:locationID]) {
+            devicePoint.x = 1 - devicePoint.x;
+        }
+        if ([self.delegate digitizerIsFlippedVerticallyForLocationID:locationID]) {
+            devicePoint.y = 1 - devicePoint.y;
+        }
+    }
+
     CGFloat rotation = screen.rotation;
 
     CGFloat extra = [[self delegate] digitizerRotationForLocationID:locationID];
@@ -866,10 +877,16 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
         CGFloat extraRotation = (self.delegate != nil)
             ? [self.delegate digitizerRotationForLocationID:locationID] : 0;
 
-        [report appendFormat:@"digitizer %#010x -> %@   (extra rotation %+.0f°)\n",
+        BOOL flippedH = (self.delegate != nil)
+            && [self.delegate digitizerIsFlippedHorizontallyForLocationID:locationID];
+        BOOL flippedV = (self.delegate != nil)
+            && [self.delegate digitizerIsFlippedVerticallyForLocationID:locationID];
+
+        [report appendFormat:@"digitizer %#010x -> %@   (extra rotation %+.0f°, mirrored %@)\n",
          locationID,
          screen ? screen.name : @"UNRESOLVED - no screen could be assigned",
-         extraRotation];
+         extraRotation,
+         flippedH ? (flippedV ? @"H+V" : @"H") : (flippedV ? @"V" : @"no")];
     }
 
     [report appendString:@"\n───── Parameters ─────\n"];

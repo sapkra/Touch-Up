@@ -20,6 +20,38 @@ struct DigitizerConfig: Codable, Hashable {
     /// Stable per physical panel across launches/rearrangements. Stronger match.
     var screenUUID: String?
     var additionalRotation: CGFloat = 0
+
+    /// Mirrors the digitizer's own axes, applied before any rotation. A glass wired backwards
+    /// on one axis cannot be corrected by rotation alone: 0/90/180/270 are the four rotations
+    /// of the panel, and every one of them preserves handedness, while this needs it reversed.
+    var isFlippedHorizontally: Bool = false
+    var isFlippedVertically: Bool = false
+
+    init() {}
+
+    /// Decoded key by key with `decodeIfPresent` instead of relying on the synthesized
+    /// initialiser, which throws on any key it cannot find — *including* one that has a default
+    /// value. Since `TouchUp.loadDigitizerConfigs()` swallows a decode failure and returns
+    /// early, one missing key silently discards every stored digitizer→screen mapping.
+    ///
+    /// That has already happened once: `additionalRotation` was added to this struct without a
+    /// tolerant decoder, so upgrading from a build that predates it drops all mappings. Every
+    /// field added from here on must decode as absent.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        screenID   = try container.decodeIfPresent(UInt.self, forKey: .screenID)
+        screenUUID = try container.decodeIfPresent(String.self, forKey: .screenUUID)
+
+        additionalRotation    = try container.decodeIfPresent(CGFloat.self, forKey: .additionalRotation) ?? 0
+        isFlippedHorizontally = try container.decodeIfPresent(Bool.self, forKey: .isFlippedHorizontally) ?? false
+        isFlippedVertically   = try container.decodeIfPresent(Bool.self, forKey: .isFlippedVertically) ?? false
+    }
+}
+
+enum DigitizerAxis {
+    case horizontal
+    case vertical
 }
 
 /// How confidently a digitizer's stored screen identity could be resolved against the

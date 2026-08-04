@@ -66,8 +66,9 @@ struct DigitizerMappingView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
 
-                if model.areAdditionalDigitizerRotationSettingsVisible || current != 0 {
+                if model.areAdditionalDigitizerRotationSettingsVisible || current != 0 || isMirrored(digitizer) {
                     rotationPicker(for: digitizer)
+                    flipButtons(for: digitizer)
                 }
 
                 Spacer(minLength: 8)
@@ -100,6 +101,44 @@ struct DigitizerMappingView: View {
         .labelsHidden()
         .pickerStyle(.menu)
         .fixedSize()
+    }
+
+
+    private func isMirrored(_ digitizer: Digitizer) -> Bool {
+        model.isFlipped(axis: .horizontal, forDigitizer: digitizer.locationID)
+            || model.isFlipped(axis: .vertical, forDigitizer: digitizer.locationID)
+    }
+
+
+    /// Mirror toggles for a glass wired backwards on one axis — the case where touches track
+    /// correctly through the centre but run the wrong way towards the edges. No rotation can
+    /// correct it, so without these the screen is simply unusable.
+    @ViewBuilder
+    private func flipButtons(for digitizer: Digitizer) -> some View {
+        HStack(spacing: 2) {
+            flipButton(for: digitizer, axis: .horizontal,
+                       symbol: "arrow.left.and.right.righttriangle.left.righttriangle.right",
+                       help: "Mirror horizontally")
+
+            flipButton(for: digitizer, axis: .vertical,
+                       symbol: "arrow.up.and.down.righttriangle.up.righttriangle.down",
+                       help: "Mirror vertically")
+        }
+    }
+
+    @ViewBuilder
+    private func flipButton(for digitizer: Digitizer, axis: DigitizerAxis,
+                            symbol: String, help: String) -> some View {
+        let isOn = model.isFlipped(axis: axis, forDigitizer: digitizer.locationID)
+
+        Button {
+            model.setFlipped(!isOn, axis: axis, forDigitizer: digitizer.locationID)
+        } label: {
+            Image(systemName: symbol)
+                .foregroundColor(isOn ? .accentColor : .secondary)
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
 
