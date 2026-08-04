@@ -193,9 +193,9 @@ static void DiagLogDeviceIdentity(IOHIDDeviceRef dev, uint32_t locationID, CFInd
     DiagLog("  contact collections: %ld\n", contactCollections);
 
     if (contactCollections == 0) {
-        DiagLog("  WARNING: no logical collection here reports a ContactIdentifier, so no touch\n"
-                "           data can be extracted from this interface. If this is the only\n"
-                "           interface for the screen, it will connect but never report a touch.\n");
+        DiagLog("  note: no collection here reports a ContactIdentifier, so this interface is\n"
+                "        single-contact at best. Touch extraction is still attempted; see the\n"
+                "        element tree below for whether any usable collection was found.\n");
     }
 }
 
@@ -421,6 +421,56 @@ void StoreInputValue(HIDDeviceState *device, IOHIDValueRef hidValue) {
 
 
 /**
+ Fallback for descriptors that carry their touch data directly in the application collection
+ instead of wrapping it in a logical collection.
+
+ Multitouch descriptors give each simultaneous contact its own logical collection, and those
+ are what the loop below harvests. A single-contact digitizer has no reason to introduce that
+ grouping and frequently does not, leaving X/Y/TipSwitch as direct children of the application
+ collection — in which case nothing is harvested at all, and the device connects, reports
+ itself present, and then silently never delivers a touch for as long as it stays plugged in.
+
+ `DispatchTouchDataForCollection` reads a collection's direct children, so the application
+ collection can simply stand in as the one and only contact.
+
+ TipSwitch is required rather than assumed: without it there is no signal for the finger
+ leaving the glass, and a touch that can begin but never end is worse than none at all.
+ */
+static void AdoptApplicationCollectionIfSingleContact(HIDDeviceState *device,
+                                                      IOHIDElementRef applicationCollection,
+                                                      Boolean printTree) {
+    if (CFArrayGetCount(device->touchCollectionElements) > 0) {
+        return;
+    }
+
+    Boolean hasX = false, hasY = false, hasTipSwitch = false;
+
+    CFArrayRef children = IOHIDElementGetChildren(applicationCollection);
+    for (CFIndex i = 0; i < CFArrayGetCount(children); i++) {
+        IOHIDElementRef element = (IOHIDElementRef)CFArrayGetValueAtIndex(children, i);
+        CFIndex page = IOHIDElementGetUsagePage(element);
+        CFIndex usage = IOHIDElementGetUsage(element);
+
+        if (page == kHIDPage_GenericDesktop && usage == kHIDUsage_GD_X) hasX = true;
+        if (page == kHIDPage_GenericDesktop && usage == kHIDUsage_GD_Y) hasY = true;
+        if (page == kHIDPage_Digitizer && usage == kHIDUsage_Dig_TipSwitch) hasTipSwitch = true;
+    }
+
+    if (hasX && hasY && hasTipSwitch) {
+        CFArrayAppendValue(device->touchCollectionElements, applicationCollection);
+        DiagLog("Treating the application collection of %#010x as a single contact: it carries\n"
+                "  X, Y and TipSwitch directly, with no logical collection to group them.\n",
+                device->locationID);
+
+    } else if (printTree) {
+        DiagLog("No logical collection, and the application collection cannot stand in for one\n"
+                "  (X:%s Y:%s TipSwitch:%s).\n",
+                hasX ? "yes" : "no", hasY ? "yes" : "no", hasTipSwitch ? "yes" : "no");
+    }
+}
+
+
+/**
  We need to inspect the HID tree as a whole once to see which elements are grouped into logical groups of touch data.
  Just pass in any element of the tree, the function will walk up the tree, search for the logical groups and rememeber them in the global variables.
  */
@@ -493,6 +543,15 @@ void IdentifyElements(HIDDeviceState *device, IOHIDElementRef anyElement, Boolea
                 DiagLog(" > %#02lx %#02lx\n", page, usage);
             }
         }
+    }
+
+    AdoptApplicationCollectionIfSingleContact(device, applicationCollection, printTree);
+
+    if (CFArrayGetCount(device->touchCollectionElements) == 0) {
+        DiagLog("WARNING: %#010x exposes no collection that touch data can be read from.\n"
+                "         It will report itself connected and then never deliver a touch.\n"
+                "         Please include this element tree in a bug report.\n",
+                device->locationID);
     }
 }
 
