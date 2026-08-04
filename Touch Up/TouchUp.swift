@@ -291,6 +291,19 @@ extension TouchUp {
         persistMapping(forLocationID: locationID)
     }
 
+    /// Lets a digitizer move the pointer, or stops it. Persisted as an explicit user override.
+    func setDrivesPointer(_ drivesPointer: Bool, forDigitizer locationID: HIDLocationID) {
+        guard var config = digitizerConfigs[locationID] else { return }
+        config.drivesPointer = drivesPointer
+        digitizerConfigs[locationID] = config
+        touchManager.setDigitizerDrivesPointer(drivesPointer, forLocationID: locationID)
+        persistMapping(forLocationID: locationID)
+    }
+
+    func drivesPointer(forDigitizer locationID: HIDLocationID) -> Bool {
+        touchManager.digitizerDrivesPointer(forLocationID: locationID)
+    }
+
     func isFlipped(axis: DigitizerAxis, forDigitizer locationID: HIDLocationID) -> Bool {
         switch axis {
         case .horizontal: return digitizerConfigs[locationID]?.isFlippedHorizontally ?? false
@@ -426,7 +439,7 @@ extension TouchUp: TUCTouchDelegate {
     
     
     
-    func touchscreenDidConnect(withLocationID locationID: UInt32) {
+    func touchscreenDidConnect(withLocationID locationID: UInt32, drivesPointer: Bool) {
         self.connectedDigitizers.append(Digitizer(locationID: locationID))
 
         // Restore a previously persisted config for this digitizer, or start a blank one
@@ -434,6 +447,16 @@ extension TouchUp: TUCTouchDelegate {
         if digitizerConfigs[locationID] == nil {
             digitizerConfigs[locationID] = persistedConfigs[locationID] ?? DigitizerConfig()
         }
+
+        // The core decided whether this device may drive the pointer from what it declares
+        // itself to be. A stored value is the user overriding that, either way.
+        //
+        // Deliberately not written back into the config: leaving it nil keeps the difference
+        // between "the user chose this" and "nobody has decided yet". Writing the guess through
+        // would let `persistAllDigitizerMappings` freeze it on window close, pinning a device
+        // off forever even after a later release learns to recognise it properly.
+        let effective = digitizerConfigs[locationID]?.drivesPointer ?? drivesPointer
+        touchManager.setDigitizerDrivesPointer(effective, forLocationID: locationID)
 
         updateConnectionState()
     }

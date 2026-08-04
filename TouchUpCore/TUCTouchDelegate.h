@@ -25,7 +25,11 @@ NS_ASSUME_NONNULL_BEGIN
 
 #pragma mark - Lifecycle
 
-- (void)touchscreenDidConnectWithLocationID:(uint32_t)locationID;
+/// `drivesPointer` reports whether the interface is allowed to move the pointer straight away.
+/// It is NO for a device that does not declare itself a TouchScreen: its touches are readable
+/// and testable, but it stays inert until the user opts in, because a device claiming to be a
+/// TouchPad may well be a real trackpad.
+- (void)touchscreenDidConnectWithLocationID:(uint32_t)locationID drivesPointer:(BOOL)drivesPointer;
 - (void)touchscreenDidDisconnectWithLocationID:(uint32_t)locationID;
 
 

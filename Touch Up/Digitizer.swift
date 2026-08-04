@@ -27,6 +27,12 @@ struct DigitizerConfig: Codable, Hashable {
     var isFlippedHorizontally: Bool = false
     var isFlippedVertically: Bool = false
 
+    /// Whether this digitizer may move the pointer. `nil` means "not decided by the user", in
+    /// which case the core's own judgement from the device's declared HID usage applies.
+    /// Storing the override rather than the effective value keeps a device that is later
+    /// recognised properly from being pinned to an old guess.
+    var drivesPointer: Bool?
+
     init() {}
 
     /// Decoded key by key with `decodeIfPresent` instead of relying on the synthesized
@@ -46,6 +52,7 @@ struct DigitizerConfig: Codable, Hashable {
         additionalRotation    = try container.decodeIfPresent(CGFloat.self, forKey: .additionalRotation) ?? 0
         isFlippedHorizontally = try container.decodeIfPresent(Bool.self, forKey: .isFlippedHorizontally) ?? false
         isFlippedVertically   = try container.decodeIfPresent(Bool.self, forKey: .isFlippedVertically) ?? false
+        drivesPointer         = try container.decodeIfPresent(Bool.self, forKey: .drivesPointer)
     }
 }
 

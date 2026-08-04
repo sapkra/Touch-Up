@@ -59,6 +59,10 @@ struct DigitizerMappingView: View {
                 .buttonStyle(.plain)
             }
 
+            if !model.drivesPointer(forDigitizer: digitizer.locationID) {
+                inertDeviceNotice(for: digitizer)
+            }
+
             HStack(spacing: 8) {
                 let current = model.digitizerConfigs[digitizer.locationID]?.additionalRotation ?? 0
 
@@ -148,6 +152,35 @@ struct DigitizerMappingView: View {
             .pickerStyle(.menu)
             .fixedSize()
         }
+    }
+
+
+    /// Shown for a device that was matched but is not allowed to move the pointer — one that
+    /// does not declare itself a touchscreen. It is deliberately not silently enabled: a device
+    /// claiming to be a trackpad may be one, and taking over a working pointing device is worse
+    /// than asking. Use *Test* first to confirm the touches land where they should.
+    @ViewBuilder
+    private func inertDeviceNotice(for digitizer: Digitizer) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "hand.raised")
+                .foregroundColor(.secondary)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Detected, but not controlling the pointer")
+                    .font(.caption)
+                Text("This device reports itself as a trackpad rather than a touchscreen. Use Test to check that touches are tracked correctly, then enable it.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            Button("Enable") {
+                model.setDrivesPointer(true, forDigitizer: digitizer.locationID)
+            }
+            .font(.caption)
+        }
+        .padding(.vertical, 2)
     }
 
 

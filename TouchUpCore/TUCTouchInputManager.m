@@ -70,10 +70,18 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
     SetTouchDevicesSeized(seized);
 }
 
+- (void)setDigitizerDrivesPointer:(BOOL)drivesPointer forLocationID:(uint32_t)locationID {
+    SetTouchDeviceDrivesPointer(locationID, drivesPointer);
+}
 
-- (void)didConnectTouchscreenWithLocationID:(uint32_t)locationID {
+- (BOOL)digitizerDrivesPointerForLocationID:(uint32_t)locationID {
+    return TouchDeviceDrivesPointer(locationID);
+}
+
+
+- (void)didConnectTouchscreenWithLocationID:(uint32_t)locationID drivesPointer:(BOOL)drivesPointer {
     self.frameIDsByLocationID[@(locationID)] = @0;
-    [self.delegate touchscreenDidConnectWithLocationID:locationID];
+    [self.delegate touchscreenDidConnectWithLocationID:locationID drivesPointer:drivesPointer];
 }
 
 - (void)didDisconnectTouchscreenWithLocationID:(uint32_t)locationID {
@@ -264,6 +272,13 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
 - (void)processTouchesForCursorInput {
     
     if(!self.cursorTouch || !self.postMouseEvents) {
+        return;
+    }
+
+    // A matched device that has not been allowed to drive the pointer still gets this far: its
+    // touches populate the touch set so it is visible in the test overlay. It just may not turn
+    // them into input.
+    if (!TouchDeviceDrivesPointer(self.cursorTouch.locationID)) {
         return;
     }
     
@@ -934,8 +949,8 @@ void TouchInputManagerDidProcessReport(void *self, uint32_t locationID) {
     [(__bridge id)self didProcessReportForLocationID:locationID];
 }
 
-void TouchInputManagerDidConnectTouchscreen(void *self, uint32_t locationID) {
-    [(__bridge id)self didConnectTouchscreenWithLocationID:locationID];
+void TouchInputManagerDidConnectTouchscreen(void *self, uint32_t locationID, Boolean drivesPointer) {
+    [(__bridge id)self didConnectTouchscreenWithLocationID:locationID drivesPointer:drivesPointer];
 }
 
 void TouchInputManagerDidDisconnectTouchscreen(void *self, uint32_t locationID) {

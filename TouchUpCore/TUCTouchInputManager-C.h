@@ -17,7 +17,7 @@ void TouchInputManagerUpdateTouchSize(void *self, uint32_t locationID, CFIndex c
 // called after a full report (no partials in hybrid modes) was handled
 void TouchInputManagerDidProcessReport(void *self, uint32_t locationID);
 
-void TouchInputManagerDidConnectTouchscreen(void *self, uint32_t locationID);
+void TouchInputManagerDidConnectTouchscreen(void *self, uint32_t locationID, Boolean drivesPointer);
 
 void TouchInputManagerDidDisconnectTouchscreen(void *self, uint32_t locationID);
 

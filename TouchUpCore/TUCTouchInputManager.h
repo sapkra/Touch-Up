@@ -75,6 +75,15 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)setTouchscreensSeized:(BOOL)seized;
 
 
+/**
+ Allows or forbids one connected digitizer to move the pointer. Touch data keeps flowing either
+ way, so a device can be watched in the test overlay before it is trusted with input.
+ A digitizer that does not declare itself a TouchScreen starts out forbidden.
+ */
+- (void)setDigitizerDrivesPointer:(BOOL)drivesPointer forLocationID:(uint32_t)locationID;
+- (BOOL)digitizerDrivesPointerForLocationID:(uint32_t)locationID;
+
+
 
 - (CGPoint)convertScreenPointRelativeToAbsolute:(CGPoint)relativePoint locationID:(uint32_t)locationID;
 

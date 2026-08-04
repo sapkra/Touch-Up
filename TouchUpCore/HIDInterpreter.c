@@ -49,6 +49,10 @@ typedef struct {
     /// Set once we have complained about this interface reporting unusable coordinates, so the
     /// warning does not repeat at report rate and flood the diagnostics transcript.
     Boolean                 didWarnAboutMissingAxes;
+
+    /// Whether this interface is allowed to move the pointer. Touches are always read and
+    /// published (so the device is visible and testable); this gates only the mouse events.
+    Boolean                 drivesPointer;
 } HIDDeviceState;
 
 static HIDDeviceState gDevices[kMaxTouchscreens];
@@ -790,6 +794,26 @@ static void ApplySeizeState(HIDDeviceState *state) {
  Opt-in exclusive access. When enabled, every accepted touch interface (current andfuture) is seized so macOS no longer receives its events.
  Applies immediately to all currently-connected touch devices; pen interfaces we never registered stay shared, so the pen keeps working through macOS.
  */
+/*!
+ Allows or forbids one interface to move the pointer. Touches keep being read and published
+ either way, so a device can be watched in the test overlay before it is trusted with input.
+ */
+void SetTouchDeviceDrivesPointer(uint32_t locationID, bool drivesPointer) {
+    HIDDeviceState *device = RegisteredDeviceForLocationID(locationID);
+    if (!device) return;
+
+    device->drivesPointer = drivesPointer;
+    DiagLog("Interface %#010x %s drive the pointer\n",
+            locationID, drivesPointer ? "may now" : "may no longer");
+}
+
+
+bool TouchDeviceDrivesPointer(uint32_t locationID) {
+    HIDDeviceState *device = RegisteredDeviceForLocationID(locationID);
+    return device ? device->drivesPointer : false;
+}
+
+
 void SetTouchDevicesSeized(bool seize) {
     gSeizeTouchDevices = seize;
     for (int i = 0; i < gDeviceCount; i++) {
@@ -899,6 +923,61 @@ static CFIndex CountContactCollections(IOHIDDeviceRef dev) {
 
 
 
+/**
+ Devices we refuse to touch at all, however they describe themselves.
+
+ Broadening the match set to include TouchPad brings Apple's own pointing devices into range,
+ and a built-in trackpad that Touch Up starts driving — or worse, seizes — leaves the user with
+ no pointer and no obvious way to undo it. Refusing them outright is deliberately stronger than
+ defaulting them to off: there is no switch anywhere that can turn a trackpad into a
+ touchscreen, so offering one would only be a way to break your Mac.
+
+ The internal transports are excluded for the same reason. Nothing reachable over SPI or a
+ FIFO is an external touch panel.
+ */
+static Boolean IsExcludedDevice(IOHIDDeviceRef dev) {
+    enum { kAppleVendorID = 0x05AC };
+
+    CFTypeRef vendor = IOHIDDeviceGetProperty(dev, CFSTR(kIOHIDVendorIDKey));
+    long vendorID = 0;
+    if (vendor && CFGetTypeID(vendor) == CFNumberGetTypeID()
+        && CFNumberGetValue((CFNumberRef)vendor, kCFNumberLongType, &vendorID)
+        && vendorID == kAppleVendorID) {
+        return true;
+    }
+
+    char transport[64];
+    CopyDeviceStringProperty(dev, CFSTR(kIOHIDTransportKey), transport, sizeof(transport));
+    if (strcmp(transport, "SPI") == 0 || strcmp(transport, "FIFO") == 0) {
+        return true;
+    }
+
+    return false;
+}
+
+
+/**
+ Whether a matched interface may drive the pointer as soon as it appears.
+
+ Only a device that declares itself a TouchScreen does. Everything else is registered and
+ listened to — so it shows up in the settings window and its touches can be watched in the
+ test overlay — but posts no mouse events until the user says so. A device that lies about
+ being a TouchPad is indistinguishable from one that really is a trackpad, and guessing wrong
+ in that direction hijacks a working pointing device.
+ */
+static Boolean ShouldDriveDeviceByDefault(IOHIDDeviceRef dev) {
+    CFTypeRef usage = IOHIDDeviceGetProperty(dev, CFSTR(kIOHIDPrimaryUsageKey));
+    long primaryUsage = 0;
+
+    if (usage && CFGetTypeID(usage) == CFNumberGetTypeID()
+        && CFNumberGetValue((CFNumberRef)usage, kCFNumberLongType, &primaryUsage)) {
+        return primaryUsage == kHIDUsage_Dig_TouchScreen;
+    }
+
+    return false;
+}
+
+
 // Allocates device state and wires up the queue + input callbacks for an interface we've
 // decided to treat as the active touchscreen. The callback context is the device ref so
 // callbacks resolve to the right per-interface state even when locationIDs collide.
@@ -943,10 +1022,24 @@ static void Handle_DeviceMatchingCallback(
 
     DiagLogDeviceIdentity(inIOHIDDeviceRef, locationID, contactCount);
 
+    if (IsExcludedDevice(inIOHIDDeviceRef)) {
+        DiagLog("  -> refused: an Apple or internally-connected pointing device is never a\n"
+                "     touchscreen, and driving one would take over the pointer\n");
+        return;
+    }
+
     if (existing == NULL) {
-        DiagLog("  -> accepted as the touchscreen for %#010x\n", locationID);
-        if (RegisterTouchDevice(inIOHIDDeviceRef, locationID, contactCount)) {
-            TouchInputManagerDidConnectTouchscreen(gTouchManager, locationID);
+        Boolean driveByDefault = ShouldDriveDeviceByDefault(inIOHIDDeviceRef);
+
+        DiagLog("  -> accepted as the touchscreen for %#010x, %s\n", locationID,
+                driveByDefault
+                    ? "driving the pointer (declares itself a TouchScreen)"
+                    : "NOT driving the pointer until enabled (does not declare itself a TouchScreen)");
+
+        HIDDeviceState *registered = RegisterTouchDevice(inIOHIDDeviceRef, locationID, contactCount);
+        if (registered) {
+            registered->drivesPointer = driveByDefault;
+            TouchInputManagerDidConnectTouchscreen(gTouchManager, locationID, driveByDefault);
         } else {
             DiagLog("  -> FAILED to allocate device state; interface not driven\n");
         }
@@ -956,10 +1049,16 @@ static void Handle_DeviceMatchingCallback(
         // which is all the upper layer keys on, stays connected throughout.
         DiagLog("  -> switching primary interface for %#010x: %ld -> %ld contact collections\n",
                locationID, existing->contactCollectionCount, contactCount);
+        // Carry the user's decision across the swap: it belongs to the screen, not to whichever
+        // of its interfaces happens to be primary.
+        Boolean drivesPointer = existing->drivesPointer;
         IOHIDDeviceRef oldDev = existing->device;
         IOHIDDeviceRegisterInputValueCallback(oldDev, NULL, NULL);
         DeallocateDeviceState(oldDev);
-        RegisterTouchDevice(inIOHIDDeviceRef, locationID, contactCount);
+        HIDDeviceState *replacement = RegisterTouchDevice(inIOHIDDeviceRef, locationID, contactCount);
+        if (replacement) {
+            replacement->drivesPointer = drivesPointer;
+        }
     } else {
         DiagLog("  -> ignored as a secondary interface of %#010x (%ld <= %ld contact collections)\n",
                locationID, contactCount, existing->contactCollectionCount);
@@ -1046,19 +1145,25 @@ void OpenHIDManager(void *delegate) {
     }
     
     
-    //    CFMutableDictionaryRef keyboard =
-    //    CreateDeviceMatchingDictionary(kHIDPage_Digitizer, kHIDUsage_Dig_Pen);
-    //    CFMutableDictionaryRef keypad =
-    //    CreateDeviceMatchingDictionary(kHIDPage_Digitizer, kHIDUsage_Dig_Touch);
-    
+    // Matching only on kHIDUsage_Dig_TouchScreen meant a panel that declares itself a TouchPad
+    // or a bare Digitizer was never even seen — and since macOS drives a TouchPad as a
+    // trackpad, that is exactly the "it behaves like a giant trackpad and Touch Up makes no
+    // difference" case. The declared usage is not trustworthy enough to be the sole filter, so
+    // match all three and decide what to do with each once its descriptor can be inspected.
+    //
+    // Anything that is not a declared TouchScreen arrives disabled: see `IsExcludedDevice` for
+    // what is refused outright, and `ShouldDriveDeviceByDefault` for what still needs a nod
+    // from the user before it is allowed to move the pointer.
     CFMutableDictionaryRef matchesList[] = {
         CreateDeviceMatchingDictionary(kHIDPage_Digitizer, kHIDUsage_Dig_TouchScreen),
+        CreateDeviceMatchingDictionary(kHIDPage_Digitizer, kHIDUsage_Dig_TouchPad),
+        CreateDeviceMatchingDictionary(kHIDPage_Digitizer, kHIDUsage_Dig_Digitizer),
     };
-    
-    
-    
+
+    CFIndex numMatches = sizeof(matchesList) / sizeof(matchesList[0]);
+
     CFArrayRef matches = CFArrayCreate(kCFAllocatorDefault,
-                                       (const void **)matchesList, 1, NULL);
+                                       (const void **)matchesList, numMatches, NULL);
     IOHIDManagerSetDeviceMatchingMultiple(gHidManager, matches);
     CFRelease(matches);
     

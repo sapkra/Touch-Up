@@ -10,6 +10,7 @@
 
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 void OpenHIDManager(void *delegate);
 
@@ -19,6 +20,14 @@ void CloseHIDManager(void);
 /// macOS and other apps stop receiving their events — Touch Up becomes the sole handler.
 /// Applies to currently-connected and future devices. Pen interfaces stay shared.
 void SetTouchDevicesSeized(bool seize);
+
+/// Allows or forbids one matched interface to move the pointer, keyed by location ID. Touch
+/// data is read and published either way, so a device can be watched in the test overlay
+/// before it is trusted with input. Interfaces that do not declare themselves a TouchScreen
+/// start out forbidden, because a device claiming to be a TouchPad may genuinely be one.
+void SetTouchDeviceDrivesPointer(uint32_t locationID, bool drivesPointer);
+
+bool TouchDeviceDrivesPointer(uint32_t locationID);
 
 /// Everything the interpreter has discovered about the connected devices: the HID element
 /// tree, which interface was accepted for each screen and why, and any errors along the way.
