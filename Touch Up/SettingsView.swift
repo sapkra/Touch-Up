@@ -121,6 +121,10 @@ struct SettingsView: View {
                 SettingsExplanationLabel(labels: model.uiLabels(for: \.areAdditionalDigitizerRotationSettingsVisible))
             }
 
+            Toggle(isOn: $model.isExclusiveAccessEnabled) {
+                SettingsExplanationLabel(labels: model.uiLabels(for: \.isExclusiveAccessEnabled))
+            }
+
             diagnosticsButton
         }
     }

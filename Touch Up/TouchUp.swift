@@ -34,6 +34,7 @@ class TouchUp: NSObject, ObservableObject {
     @Published var isClickOnLiftEnabled = false
     @Published var isDraggingWithOneFingerEnabled = false
     @Published var isPressAndHoldEnabled = false
+    @Published var isExclusiveAccessEnabled = false
 
     @Published var areAdditionalDigitizerRotationSettingsVisible = false
 
@@ -169,6 +170,7 @@ extension TouchUp {
             "isClickOnLiftEnabled" : false,
             "isDraggingWithOneFingerEnabled" : false,
             "isPressAndHoldEnabled" : false,
+            "isExclusiveAccessEnabled" : false,
             "areAdditionalDigitizerRotationSettingsVisible" : false
         ])
         
@@ -188,7 +190,10 @@ extension TouchUp {
             $doubleClickDistance.assign(to: \.doubleClickTolerance, on: touchManager),
             $tapDistance.assign(to: \.tapTolerance, on: touchManager),
             $errorResistance.assign(to: \.errorResistance, on: touchManager),
-            $ignoreOriginTouches.assign(to: \.ignoreOriginTouches, on: touchManager)
+            $ignoreOriginTouches.assign(to: \.ignoreOriginTouches, on: touchManager),
+            $isExclusiveAccessEnabled.sink { [weak self] enabled in
+                self?.touchManager.setTouchscreensSeized(enabled)
+            }
         ]
         
         
@@ -200,6 +205,7 @@ extension TouchUp {
         isClickOnLiftEnabled = defaults.bool(forKey: "isClickOnLiftEnabled")
         isDraggingWithOneFingerEnabled = defaults.bool(forKey: "isDraggingWithOneFingerEnabled")
         isPressAndHoldEnabled = defaults.bool(forKey: "isPressAndHoldEnabled")
+        isExclusiveAccessEnabled = defaults.bool(forKey: "isExclusiveAccessEnabled")
         areAdditionalDigitizerRotationSettingsVisible = defaults.bool(forKey: "areAdditionalDigitizerRotationSettingsVisible")
     }
     
@@ -220,6 +226,7 @@ extension TouchUp {
         defaults.set(isClickOnLiftEnabled, forKey: "isClickOnLiftEnabled")
         defaults.set(isDraggingWithOneFingerEnabled, forKey: "isDraggingWithOneFingerEnabled")
         defaults.set(isPressAndHoldEnabled, forKey: "isPressAndHoldEnabled")
+        defaults.set(isExclusiveAccessEnabled, forKey: "isExclusiveAccessEnabled")
         defaults.set(areAdditionalDigitizerRotationSettingsVisible, forKey: "areAdditionalDigitizerRotationSettingsVisible")
     }
 
@@ -500,6 +507,10 @@ extension TouchUp {
         case \.isClickOnLiftEnabled:
             return("Point and click",
                    "Very reduced input set for exhibits: Move cursor by dragging, and click by releasing. Overrides scrolling and dragging functionality.")
+
+        case \.isExclusiveAccessEnabled:
+            return("Exclusive Access",
+                   "Take sole control of the touchscreen so macOS stops handling it too. Enable this if your screen still behaves like a trackpad, or if every touch seems to register twice. (EXPERIMENTAL)")
 
         case \.isPressAndHoldEnabled:
             return("Press and Hold",
