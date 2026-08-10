@@ -472,6 +472,13 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
 
         [self stopCurrentGesture];
 
+        // Only while the pointer is hidden. Moving a pointer the user can see, just after they
+        // touched somewhere, would be its own kind of wrong.
+        if (self.hidesCursor) {
+            [[TUCCursorUtilities sharedInstance]
+                nudgeCursorInsideFrame:[self absoluteBoundsForLocationID:cursorTouch.locationID]];
+        }
+
         return;
     }
     
@@ -828,6 +835,30 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
     return [screen convertGlassPointToContentPoint:rotated];
 }
 
+
+
+/**
+ The region a digitizer's touches actually land in, in the coordinate space mouse events use.
+
+ Derived by converting the two opposite corners rather than from `TUCScreen.frame`, whose
+ `origin.y` is stored negated — which is why `-convertPointRelativeToAbsolute:` subtracts it
+ instead of adding. Going through the same conversion that positions the clicks means this cannot
+ disagree with where they land, whatever that sign convention is doing.
+ */
+- (CGRect)absoluteBoundsForLocationID:(uint32_t)locationID {
+    TUCScreen *screen = [self touchscreenForLocationID:locationID];
+    if (screen == nil) {
+        return CGRectNull;
+    }
+
+    CGPoint origin = [screen convertPointRelativeToAbsolute:CGPointZero];
+    CGPoint opposite = [screen convertPointRelativeToAbsolute:CGPointMake(1, 1)];
+
+    return CGRectMake(MIN(origin.x, opposite.x),
+                      MIN(origin.y, opposite.y),
+                      fabs(opposite.x - origin.x),
+                      fabs(opposite.y - origin.y));
+}
 
 
 - (CGPoint)convertScreenPointRelativeToAbsolute:(CGPoint)relativePoint locationID:(uint32_t)locationID {

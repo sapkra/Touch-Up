@@ -196,6 +196,38 @@ static Boolean TUCSetCursorHiddenInBackground(Boolean hidden) {
 
 
 /**
+ A pointer left sitting against a screen edge is treated by macOS as someone deliberately pushing
+ into it: the auto-hidden Dock slides out, the menu bar drops down in full screen, and a corner
+ fires whatever hot corner is assigned. Touching near the bottom of the glass therefore summoned
+ the Dock every time, because the pointer was moved there and simply stayed.
+
+ Nudging it inside once the touch is over costs nothing — the click has already been delivered at
+ the real position — and it is invisible while the pointer is hidden.
+ */
+- (void)nudgeCursorInsideFrame:(CGRect)frame {
+    // Enough to clear the edge-trigger bands, small enough to stay on whatever was touched.
+    const CGFloat inset = 12.0;
+
+    if (CGRectIsEmpty(frame) || CGRectIsNull(frame)) {
+        return;
+    }
+
+    CGPoint location = [self currentCursorLocation];
+    CGPoint parked = CGPointMake(MAX(CGRectGetMinX(frame) + inset, MIN(CGRectGetMaxX(frame) - inset, location.x)),
+                                 MAX(CGRectGetMinY(frame) + inset, MIN(CGRectGetMaxY(frame) - inset, location.y)));
+
+    if (CGPointEqualToPoint(parked, location)) {
+        return;
+    }
+
+    CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, parked, kCGMouseButtonLeft);
+    CGEventSetIntegerValueField(event, kCGMouseEventClickState, 0);
+    [self postSyntheticEvent:event];
+    CFRelease(event);
+}
+
+
+/**
  Posts a click whose only job is to raise the window under it, for a tap that landed on a
  window that is not frontmost.
 

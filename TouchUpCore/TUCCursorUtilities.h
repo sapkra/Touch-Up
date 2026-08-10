@@ -58,6 +58,15 @@ static const int64_t kTUCSyntheticEventUserData = 0x54554348; // 'TUCH'
 
 - (void)moveCursorTo:(CGPoint)aLocation;
 
+/**
+ Moves the pointer just far enough inside `frame` to stop resting against an edge, and does
+ nothing if it already is.
+
+ Unlike `-moveCursorTo:` this leaves a running drag or flick alone: it is meant to be called as a
+ touch ends, when cancelling the momentum that touch just handed off would be exactly wrong.
+ */
+- (void)nudgeCursorInsideFrame:(CGRect)frame;
+
 - (void)performClickAt:(CGPoint)aLocation;
 
 - (void)performSecondaryClickAt:(CGPoint)aLocation;
