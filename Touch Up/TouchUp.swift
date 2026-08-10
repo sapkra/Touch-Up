@@ -23,7 +23,7 @@ class TouchUp: NSObject, ObservableObject {
     
     @Published var holdDuration: TimeInterval = 0.1
     @Published var doubleClickDistance: CGFloat = 3 //mm
-    @Published var tapDistance: CGFloat = 2.5 //mm
+    @Published var tapDistance: CGFloat = 5 //mm
     @Published var errorResistance: NSInteger = 0 // num of Reports to wait before cancelling a touch
     @Published var ignoreOriginTouches: Bool = false
     
@@ -195,7 +195,7 @@ extension TouchUp {
         defaults.register(defaults: [
             "holdDuration" : 0.1,
             "doubleClickDistance" : 8,
-            "tapDistance" : 2.5,
+            "tapDistance" : 5,
             "errorResistance" : 4,
             "ignoreOriginTouches" : true,
 
@@ -216,7 +216,12 @@ extension TouchUp {
         // selectable while the distance check was broken and therefore inert, so a stored 0 is
         // not a deliberate choice — lift it to the smallest value the slider now offers.
         doubleClickDistance = max(1, defaults.double(forKey: "doubleClickDistance"))
-        tapDistance = defaults.double(forKey: "tapDistance")
+        // 2.5 mm was the previous default and is tuned for phone-sized pointing. A tap on a large
+        // panel, made with the whole arm rather than a thumb, drifts further than that — and any
+        // drift past this radius becomes a scroll instead of a click, which is why taps sometimes
+        // only moved the pointer. Treat exactly the old default as "never chosen" and lift it.
+        let storedTapDistance = defaults.double(forKey: "tapDistance")
+        tapDistance = (storedTapDistance == 2.5) ? 5 : storedTapDistance
         errorResistance = defaults.integer(forKey: "errorResistance")
         ignoreOriginTouches = defaults.bool(forKey: "ignoreOriginTouches")
 
@@ -569,7 +574,7 @@ extension TouchUp {
 
         case \.tapDistance:
             return("Tap Zone",
-                   "How many mm your finger may slide while touching and still count as a tap instead of a drag. Increase this if taps do not click reliably.")
+                   "How many mm your finger may slide while touching and still count as a tap instead of a scroll. Raise it if taps sometimes only move the pointer instead of clicking; lower it if scrolling feels like it starts too late.")
             
         case \.ignoreOriginTouches:
             return("Ignore Origin Touches",

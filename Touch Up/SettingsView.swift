@@ -124,7 +124,9 @@ struct SettingsView: View {
                 SettingsExplanationLabel(labels: model.uiLabels(for: \.doubleClickDistance))
             }
 
-            Slider(value: $model.tapDistance, in: 0.5...8, step: 0.5) {
+            // Reaches 16 mm because pointing precision scales with the panel: a tap on a 32"
+            // display is nothing like a tap on a 7" one.
+            Slider(value: $model.tapDistance, in: 0.5...16, step: 0.5) {
                 SettingsExplanationLabel(labels: model.uiLabels(for: \.tapDistance))
             }
         }
