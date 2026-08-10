@@ -52,6 +52,11 @@ static const int64_t kTUCSyntheticEventUserData = 0x54554348; // 'TUCH'
 /// Reported in the diagnostics so a pointer that stubbornly reappears is explicable.
 @property (readonly) BOOL canHideCursorSystemWide;
 
+/// Click state stamped on the most recent press: 1 single, 2 double, 3 triple. Reported in the
+/// diagnostics, because a click arriving as a double is indistinguishable from a click going
+/// missing if all you can see is that tapping did not do what you meant.
+@property (readonly) NSInteger lastClickCount;
+
 - (CGPoint)currentCursorLocation;
 
 - (void)bringWindowToFrontAt:(CGPoint)aLocation;

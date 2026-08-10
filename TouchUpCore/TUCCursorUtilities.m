@@ -47,6 +47,10 @@ static const CGFloat kMomentumDecayPerFrame = 0.95;
 /// pixel around and delays the gesture ending.
 static const CGFloat kMomentumMinimumSpeed = 30.0;
 
+/// Single, double, triple. Nothing in a macOS interface acts on more, and letting the count run
+/// past it means a run of taps never produces a plain click again.
+static const NSInteger kMaximumClickCount = 3;
+
 
 @implementation TUCCursorUtilities
 
@@ -179,6 +183,11 @@ static Boolean TUCSetCursorHiddenInBackground(Boolean hidden) {
 }
 
 
+- (NSInteger)lastClickCount {
+    return self.cursorClickCount;
+}
+
+
 - (CGPoint)currentCursorLocation {
     CGEventRef dummy = CGEventCreate(NULL);
     CGPoint location = CGEventGetLocation(dummy);
@@ -303,11 +312,12 @@ static Boolean TUCSetCursorHiddenInBackground(Boolean hidden) {
  the system's double-click interval, and the new one lands inside `doubleClickTolerance` of
  the previous one. Anything else starts a fresh sequence at 1.
 
- The count is not capped. A real mouse keeps counting past a triple click — a quadruple click
- selects a paragraph in some text views — and it used to wrap back to 1 on the fourth press
- here, which made the *fifth* press of a rapid series look like the second press of a new
- double click. Rapid repeat tapping therefore produced double clicks the user never asked
- for.
+ Held at 3, the highest count macOS interfaces actually act on. Both other options are worse:
+ wrapping back to 1 on the fourth press, as this originally did, makes the fifth press look like
+ the second press of a new double click and manufactures double clicks nobody asked for. Letting
+ it run free, which is what a mouse does, means someone tapping steadily on one spot — exactly
+ what testing whether tapping works looks like — climbs to click state 6, 7, 8 and never gets a
+ plain single click again. Clamping keeps every event a click something will act on.
  */
 - (void)updateCursorClickCountWithLocation:(CGPoint)aLocation {
     ++self.cursorClickCount;
@@ -327,6 +337,10 @@ static Boolean TUCSetCursorHiddenInBackground(Boolean hidden) {
                    aLocation.y - self.locationOfLastClick.y) > self.doubleClickTolerance) {
         // touch is too far away
         self.cursorClickCount = 1;
+    }
+
+    else if (self.cursorClickCount > kMaximumClickCount) {
+        self.cursorClickCount = kMaximumClickCount;
     }
 
     // Every press that advances the sequence also becomes the reference for the next one.

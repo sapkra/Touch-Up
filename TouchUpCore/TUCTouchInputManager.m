@@ -809,8 +809,12 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
 
     // `TouchDown` fires on every touch and would swamp the record; everything else is a decision.
     if (gesture != TUCCursorGestureTouchDown) {
-        [self logGesture:[NSString stringWithFormat:@"  %@ -> %@",
-                          TUCNameForGesture(gesture), TUCNameForAction(action)]];
+        BOOL isClick = (action == TUCCursorActionClick || action == TUCCursorActionPointAndClick
+                        || action == TUCCursorActionMoveClickIfNeeded);
+        [self logGesture:[NSString stringWithFormat:@"  %@ -> %@%@",
+                          TUCNameForGesture(gesture), TUCNameForAction(action),
+                          isClick ? [NSString stringWithFormat:@" (click state %ld after)",
+                                     (long)[TUCCursorUtilities sharedInstance].lastClickCount] : @""]];
     }
     
     CGFloat doubleClickSpan = self.doubleClickTolerance * [[self touchscreenForLocationID:touch.locationID] pixelsPerMM];
