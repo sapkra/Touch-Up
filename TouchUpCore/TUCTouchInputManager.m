@@ -23,6 +23,14 @@
 @property CGPoint cursorTouchStationaryAnchor; // reference point the hold clock is measured against
 @property (strong) NSDate *cursorTouchStationarySinceDate;
 @property BOOL cursorTouchDidActuatePress; // YES once this touch has put the mouse button down
+@property BOOL cursorTouchDidActuateLongPress; // YES once this touch has opened a context menu
+
+/// Inter-finger spread and midpoint when the second finger arrived, in mm and relative
+/// coordinates. A two-finger gesture is pinch or pan depending on which of the two has moved
+/// further since, which is far steadier than comparing per-report directions.
+@property BOOL hasTwoFingerBaseline;
+@property CGFloat twoFingerBaselineSpread;
+@property CGPoint twoFingerBaselineMidpoint;
 
 @property CGFloat pinchDistance;
 
@@ -61,6 +69,13 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
  aspect ratio.
  */
 static const CGFloat kSecondFingerProximity = 60.0;
+
+/**
+ How far (mm) a two-finger gesture has to develop before it is called a pinch or a pan. Deciding
+ on the first report or two reads mostly noise; waiting until one interpretation is clearly ahead
+ costs a few milliseconds and gets it right.
+ */
+static const CGFloat kTwoFingerCommitDistance = 2.0;
 
 
 @implementation TUCTouchInputManager
@@ -225,6 +240,7 @@ static const CGFloat kSecondFingerProximity = 60.0;
     [[TUCCursorUtilities sharedInstance] stopMagnifying];
 
     self.identifiedMultitouchGesture = _TUCCursorGestureNone;
+    self.hasTwoFingerBaseline = NO;
 }
 
 
@@ -277,6 +293,7 @@ static const CGFloat kSecondFingerProximity = 60.0;
         self.cursorTouchQualifiedForTap = YES;
         self.cursorTouchDidHold = NO;
         self.cursorTouchDidActuatePress = NO;
+        self.cursorTouchDidActuateLongPress = NO;
         self.cursorTouchStationaryAnchor = touch.location;
         self.cursorTouchStationarySinceDate = [NSDate date];
     }
@@ -380,8 +397,21 @@ static const CGFloat kSecondFingerProximity = 60.0;
         return;
     }
 
-    if ([[NSDate date] timeIntervalSinceDate:self.cursorTouchStationarySinceDate] > self.holdDuration) {
-        self.cursorTouchDidHold = YES;
+    if ([[NSDate date] timeIntervalSinceDate:self.cursorTouchStationarySinceDate] <= self.holdDuration) {
+        return;
+    }
+
+    self.cursorTouchDidHold = YES;
+
+    // Fire it here, with the finger still down, rather than waiting for the lift. A tablet opens
+    // the menu under your finger while you hold, and that feedback is the point: without it you
+    // hold, see nothing, and only discover on release whether you got a click or a menu.
+    //
+    // Once it has fired the touch is spent. Anything further from it is ignored — a menu is open,
+    // and the way to choose from a menu is to tap an item, exactly as with a real right-click.
+    if ([self actionForGesture:TUCCursorGestureLongPress] != TUCCursorActionNone) {
+        [self performMouseEventForGesture:TUCCursorGestureLongPress];
+        self.cursorTouchDidActuateLongPress = YES;
     }
 }
 
@@ -451,28 +481,15 @@ static const CGFloat kSecondFingerProximity = 60.0;
                                         "touch that simply stopped being reported is being treated as a tap."];
         }
 
-        // What the touch turns out to have been is only decidable now, which is the whole reason
-        // nothing is emitted when the hold is first recognised:
-        //
-        //   never left the slop, brief          -> a tap
-        //   never left the slop, held           -> a long press: a context menu, as on a tablet
-        //   left the slop after holding still   -> picking something up, i.e. a drag
-        //   left the slop straight away         -> a scroll
+        //   never left the slop  -> a tap, unless the hold already opened a menu
+        //   left the slop         -> the end of a scroll
         if (!wasMultitouchGesture && !wasLostMidGesture) {
-            if (self.cursorTouchQualifiedForTap) {
-                // A hold with nothing mapped to it still has to click, or holding a moment too
-                // long over a button would silently do nothing at all.
-                BOOL longPressDoesSomething =
-                    [self actionForGesture:TUCCursorGestureLongPress] != TUCCursorActionNone;
-
-                if (self.cursorTouchDidHold && longPressDoesSomething) {
-                    [self performMouseEventForGesture:TUCCursorGestureLongPress];
-                } else if (!didActuatePress) {
+            if (self.cursorTouchDidActuateLongPress) {
+                // The menu is already open; the lift is not a click.
+            } else if (self.cursorTouchQualifiedForTap) {
+                if (!didActuatePress) {
                     [self performMouseEventForGesture:TUCCursorGestureTap];
                 }
-
-            } else if (self.cursorTouchDidHold) {
-                [self performMouseEventForGesture:TUCCursorGestureHoldAndDrag];
             } else {
                 [self performMouseEventForGesture:TUCCursorGestureDrag];
             }
@@ -495,59 +512,39 @@ static const CGFloat kSecondFingerProximity = 60.0;
     }
     
     if ([touches count] == 2 && [touches containsObject: cursorTouch]) {
-        // check if we need to initiate two finger drag, pinch, ...
-        if (self.identifiedMultitouchGesture == _TUCCursorGestureNone ) {
-            
-            TUCTouch *otherTouch = touches[1];
-            if (otherTouch.uuid == cursorTouch.uuid) {
-                otherTouch = touches[0];
-            }
-            
-            self.gestureAdditionalTouch = otherTouch;
-            
-            if (self.gestureAdditionalTouch.isActive) {
-                CGPoint trajectoryA = [cursorTouch trajectorySign];
-                CGPoint trajectoryB = [otherTouch trajectorySign];
-                
-                
-                if (   !CGPointEqualToPoint(trajectoryA, CGPointZero)
-                    && !CGPointEqualToPoint(trajectoryB, CGPointZero)) {
+        TUCTouch *otherTouch = touches[1];
+        if (otherTouch.uuid == cursorTouch.uuid) {
+            otherTouch = touches[0];
+        }
+        self.gestureAdditionalTouch = otherTouch;
 
-                    if (!CGPointEqualToPoint(trajectoryA, trajectoryB)) {
-                        self.identifiedMultitouchGesture = TUCCursorGesturePinch;
-                    }
-                    // Both fingers travelling the same way is a two-finger drag — but only
-                    // claim it when the delegate actually maps it to something. Claiming a
-                    // gesture suppresses the fall-through below, so identifying one that maps
-                    // to no action would turn two fingers from "behaves like one finger" into
-                    // "does nothing at all".
-                    else if ([self actionForGesture:TUCCursorGestureTwoFingerDrag] != TUCCursorActionNone) {
-                        self.identifiedMultitouchGesture = TUCCursorGestureTwoFingerDrag;
-                    }
-                }
-                
-            } else {
-                // secondary click
-                [self removeTouch:self.gestureAdditionalTouch now:YES];
-                self.gestureAdditionalTouch = nil;
-                [self performMouseEventForGesture:TUCCursorGestureTapSecondFinger];
-            }
+        if (self.identifiedMultitouchGesture == _TUCCursorGestureNone) {
+            [self classifyTwoFingerGestureWithSecondTouch:otherTouch];
         }
-        
-        // other finger lifted, gesture ended
-        if (!self.gestureAdditionalTouch.isActive) {
-            [self stopCurrentGesture];
-        }
-        
-        
-        if(self.identifiedMultitouchGesture != _TUCCursorGestureNone) {
+
+        if (self.identifiedMultitouchGesture != _TUCCursorGestureNone) {
             [self performMouseEventForGesture:self.identifiedMultitouchGesture];
-            return;
         }
-        
+
+        // Two fingers are down. Even while it is still undecided, this is not one-finger input, so
+        // nothing below may run — otherwise the opening reports of every two-finger gesture would
+        // scroll before the gesture was recognised.
+        return;
     }
-    
-    
+
+    // A gesture that is already running keeps running until every finger is up. Lifting the second
+    // finger part-way through a two-finger drag used to fall through to the one-finger path and
+    // turn the rest of the drag into a scroll.
+    if (self.identifiedMultitouchGesture != _TUCCursorGestureNone) {
+        [self performMouseEventForGesture:self.identifiedMultitouchGesture];
+        return;
+    }
+
+    // The touch has already done what it was going to do.
+    if (self.cursorTouchDidActuateLongPress) {
+        return;
+    }
+
     // Still inside the tap slop: the finger has not travelled far enough to mean anything
     // but a tap yet. Committing to a scroll or a drag here would emit a few pixels of stray
     // movement on every tap — exactly the noise the slop radius exists to absorb.
@@ -555,10 +552,55 @@ static const CGFloat kSecondFingerProximity = 60.0;
         return;
     }
 
-    if (self.cursorTouchDidHold) {
-        [self performMouseEventForGesture:TUCCursorGestureHoldAndDrag];
-    } else {
-        [self performMouseEventForGesture:TUCCursorGestureDrag];
+    [self performMouseEventForGesture:TUCCursorGestureDrag];
+}
+
+
+/**
+ Decides whether two fingers are pinching or panning, by which of the two has developed further
+ since the second finger landed: the gap between them changing means a pinch, the pair travelling
+ together means a pan.
+
+ This used to compare the two fingers' per-report direction signs and call any mismatch a pinch.
+ A single report where one finger happened not to move on one axis was enough to read a pan as a
+ pinch, which is survivable when the alternative is nothing but not when panning is the gesture
+ for dragging anything at all.
+ */
+- (void)classifyTwoFingerGestureWithSecondTouch:(TUCTouch *)otherTouch {
+    TUCTouch *cursorTouch = self.cursorTouch;
+    TUCScreen *screen = [self touchscreenForLocationID:cursorTouch.locationID];
+    if (screen == nil) {
+        return;
+    }
+
+    CGPoint midpoint = CGPointMake((cursorTouch.location.x + otherTouch.location.x) / 2.0,
+                                   (cursorTouch.location.y + otherTouch.location.y) / 2.0);
+    CGFloat spread = [screen millimetreDistanceBetweenRelativePoint:cursorTouch.location
+                                                                and:otherTouch.location];
+
+    if (!self.hasTwoFingerBaseline) {
+        self.hasTwoFingerBaseline = YES;
+        self.twoFingerBaselineSpread = spread;
+        self.twoFingerBaselineMidpoint = midpoint;
+        return;
+    }
+
+    CGFloat spreadChange = fabs(spread - self.twoFingerBaselineSpread);
+    CGFloat commonTravel = [screen millimetreDistanceBetweenRelativePoint:midpoint
+                                                                     and:self.twoFingerBaselineMidpoint];
+
+    // Hold off until one reading is clearly ahead, so the first noisy reports cannot decide it.
+    if (MAX(spreadChange, commonTravel) < kTwoFingerCommitDistance) {
+        return;
+    }
+
+    TUCCursorGesture candidate = (spreadChange > commonTravel)
+        ? TUCCursorGesturePinch
+        : TUCCursorGestureTwoFingerDrag;
+
+    // Claiming a gesture nothing is mapped to would only suppress everything else.
+    if ([self actionForGesture:candidate] != TUCCursorActionNone) {
+        self.identifiedMultitouchGesture = candidate;
     }
 }
 
@@ -578,6 +620,11 @@ static const CGFloat kSecondFingerProximity = 60.0;
 - (BOOL)checkForSecondaryClick {
     TUCTouch *cursorTouch = self.cursorTouch;
     if (cursorTouch == nil || self.identifiedMultitouchGesture != _TUCCursorGestureNone) {
+        return NO;
+    }
+
+    // Resting long enough already opened a menu; a second finger must not open another.
+    if (self.cursorTouchDidActuateLongPress) {
         return NO;
     }
 

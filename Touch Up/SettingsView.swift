@@ -44,7 +44,7 @@ struct SettingsView: View {
     var tabletModeRow: some View {
         HStack(alignment: .top) {
             SettingsExplanationLabel(labels: ("iPad Mode",
-                                              "One finger scrolls, a tap clicks, a long press opens the right-click menu, holding then moving drags, and pinch zooms — with no mouse pointer. Sets the options below; you can still change any of them afterwards."))
+                                              "One finger scrolls, a tap clicks, holding opens the right-click menu, two fingers drag, and pinch zooms — with no mouse pointer. Sets the options below; you can still change any of them afterwards."))
 
             Spacer(minLength: 8)
 

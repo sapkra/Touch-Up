@@ -127,9 +127,8 @@ class TouchUp: NSObject, ObservableObject {
     /// used to trigger by accident.
     static let tabletModeHoldDuration: TimeInterval = 0.5
 
-    /// One finger scrolls the content, a tap clicks, a long press opens the right-click menu,
-    /// holding then moving drags, two fingers tap for a secondary click and pinch to zoom — and no
-    /// pointer. The individual settings stay editable underneath.
+    /// One finger scrolls, a tap clicks, holding opens the right-click menu, two fingers drag and
+    /// pinch zooms — and no pointer. The individual settings stay editable underneath.
     func activateTabletMode() {
         isScrollingWithOneFingerEnabled = true
         isClickOnLiftEnabled = false
@@ -475,10 +474,11 @@ extension TouchUp: TUCTouchDelegate {
             return isSecondaryClickEnabled ? .secondaryClick : .none
             
         case .TUCCursorGestureTwoFingerDrag:
-            // Only meaningful when one finger is already dragging, where two fingers take over
-            // scrolling. Left unmapped otherwise so the core does not claim the gesture at all
-            // and two fingers keep behaving like one, exactly as they always have.
-            return isDraggingWithOneFingerEnabled ? .scroll : .none
+            // Whichever job one finger is not doing. With one finger scrolling, two fingers hold
+            // the button down and drag — the only way to pan a map, move a window, work a slider
+            // or select text, since no rule can tell those apart from a scroll area.
+            if isDraggingWithOneFingerEnabled { return .scroll }
+            return isScrollingWithOneFingerEnabled ? .drag : .none
             
         case .TUCCursorGesturePinch:
             return isMagnificationEnabled ? .magnify : .none
@@ -562,7 +562,7 @@ extension TouchUp {
 
         case \.isLongPressContextMenuEnabled:
             return("Long Press for Menu",
-                   "Hold your finger still and lift it to open the right-click menu, the way a long press does on a tablet. Holding and then moving still picks things up and drags them.")
+                   "Hold your finger still for a moment and the right-click menu opens under it, the way a long press does on a tablet. Use two fingers to drag things.")
             
         case \.holdDuration:
             return("Hold Duration",
