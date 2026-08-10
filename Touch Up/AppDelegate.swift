@@ -12,7 +12,7 @@ import TouchUpCore
 
 
 @main
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     let model = TouchUp()
     
@@ -20,7 +20,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
     @IBOutlet weak var statusMenu: NSMenu!
     @IBOutlet weak var activationMenuItem: NSMenuItem!
-    
+    @IBOutlet weak var keyboardMenuItem: NSMenuItem!
+
     var observers = [AnyCancellable]()
     
     
@@ -35,6 +36,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     @IBAction func toggleActivationMenu(_ sender: Any) {
         self.model.isPublishingMouseEventsEnabled.toggle()
+    }
+
+    /// The way to the keyboard that always works, however well the automatic side manages to guess
+    /// whether a text field has focus.
+    @IBAction func toggleKeyboardMenu(_ sender: Any) {
+        self.model.keyboard.toggle()
+    }
+
+    /// Greys the keyboard item out rather than letting it silently do nothing while the feature is
+    /// switched off, so the settings are discoverable as the way in. Automatic menu enabling would
+    /// otherwise enable it purely because the action exists.
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem == self.keyboardMenuItem {
+            return self.model.isOnScreenKeyboardEnabled
+        }
+        return true
     }
     
     
@@ -63,6 +80,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     self.activationMenuItem.state = $0 ? .on : .off
                 }
         )
+
+        self.observers.append(
+            self.model.keyboard.$isVisible
+                .receive(on: DispatchQueue.main)
+                .sink{
+                    self.keyboardMenuItem?.state = $0 ? .on : .off
+                }
+        )
+
         
         self.model.touchManager.start()
         

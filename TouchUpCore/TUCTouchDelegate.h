@@ -56,6 +56,18 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)digitizerIsFlippedHorizontallyForLocationID:(uint32_t)locationID;
 - (BOOL)digitizerIsFlippedVerticallyForLocationID:(uint32_t)locationID;
 
+
+@optional
+
+/**
+ A finger landed on a different digitizer than the one before it.
+
+ For interface that should be on the panel the user is actually using. Sent only when the panel
+ changes, not per touch and certainly not per report — `-touchesDidChange` is the firehose, and doing
+ screen arithmetic there would put it in the path every HID report has to travel.
+ */
+- (void)lastTouchedDigitizerDidChange:(uint32_t)locationID;
+
 @end
 
 NS_ASSUME_NONNULL_END

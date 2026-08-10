@@ -121,6 +121,22 @@ struct SettingsView: View {
     }
     
     
+    /// Its own section rather than another row under Gestures: a keyboard is not a gesture, and that
+    /// group is one child away from the ten a `ViewBuilder` will take.
+    var keyboardSettings: some View {
+        Group {
+            Toggle(isOn: $model.isOnScreenKeyboardEnabled) {
+                SettingsExplanationLabel(labels: model.uiLabels(for: \.isOnScreenKeyboardEnabled))
+            }
+
+            Toggle(isOn: $model.isKeyboardAutoShowEnabled) {
+                SettingsExplanationLabel(labels: model.uiLabels(for: \.isKeyboardAutoShowEnabled))
+            }
+            .disabled(!model.isOnScreenKeyboardEnabled)
+        }
+    }
+
+
     var parameterSettings: some View {
         Group {
             // Reaches 0.8 s so a genuine long press is selectable at all: iPadOS uses about
@@ -247,7 +263,11 @@ struct SettingsView: View {
                 Section("Gestures") {
                     gestureSettings
                 }
-                
+
+                Section("Keyboard") {
+                    keyboardSettings
+                }
+
                 Section("Parameters") {
                     parameterSettings
                 }
@@ -278,7 +298,11 @@ struct SettingsView: View {
                 LegacySection(title: "Gestures") {
                     gestureSettings
                 }
-                
+
+                LegacySection(title: "Keyboard") {
+                    keyboardSettings
+                }
+
                 LegacySection(title: "Parameters") {
                     parameterSettings
                 }

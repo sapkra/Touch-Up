@@ -30,6 +30,13 @@
 		7052F45A298D3A450066014F /* TUCTouchInputManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 7052F458298D3A450066014F /* TUCTouchInputManager.m */; };
 		70C8D697298D5D2B00CFA6D4 /* TouchUp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70C8D696298D5D2B00CFA6D4 /* TouchUp.swift */; };
 		70D2AFCF2FC04C0800342757 /* HIDLocationID.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70D2AFCE2FC04C0800342757 /* HIDLocationID.swift */; };
+		70AB101B2FE0A10000AB101B /* KeyboardLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70AB101A2FE0A10000AB101A /* KeyboardLayout.swift */; };
+		70AB102B2FE0A10000AB102B /* KeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70AB102A2FE0A10000AB102A /* KeyboardView.swift */; };
+		70AB103B2FE0A10000AB103B /* KeyboardPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70AB103A2FE0A10000AB103A /* KeyboardPanel.swift */; };
+		70AB104B2FE0A10000AB104B /* KeyboardController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70AB104A2FE0A10000AB104A /* KeyboardController.swift */; };
+		70AB105B2FE0A10000AB105B /* TUCKeyboardTyper.h in Headers */ = {isa = PBXBuildFile; fileRef = 70AB105A2FE0A10000AB105A /* TUCKeyboardTyper.h */; settings = {ATTRIBUTES = (Public, ); }; };
+		70AB106B2FE0A10000AB106B /* TUCKeyboardTyper.m in Sources */ = {isa = PBXBuildFile; fileRef = 70AB106A2FE0A10000AB106A /* TUCKeyboardTyper.m */; };
+		70AB100B2FE0A10000AB100B /* FocusWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70AB100A2FE0A10000AB100A /* FocusWatcher.swift */; };
 		70D2AFD12FC04E6400342757 /* DebugOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70D2AFD02FC04E6400342757 /* DebugOverlay.swift */; };
 		70FC06B62FC07F4100AB7995 /* Digitizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70FC06B52FC07F4100AB7995 /* Digitizer.swift */; };
 		70FE7F8C2F858616005FF048 /* Icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 70FE7F8B2F858616005FF048 /* Icon.icon */; };
@@ -84,6 +91,13 @@
 		7052F458298D3A450066014F /* TUCTouchInputManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TUCTouchInputManager.m; sourceTree = "<group>"; };
 		70C8D696298D5D2B00CFA6D4 /* TouchUp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchUp.swift; sourceTree = "<group>"; };
 		70D2AFCE2FC04C0800342757 /* HIDLocationID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HIDLocationID.swift; sourceTree = "<group>"; };
+		70AB101A2FE0A10000AB101A /* KeyboardLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardLayout.swift; sourceTree = "<group>"; };
+		70AB102A2FE0A10000AB102A /* KeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardView.swift; sourceTree = "<group>"; };
+		70AB103A2FE0A10000AB103A /* KeyboardPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardPanel.swift; sourceTree = "<group>"; };
+		70AB104A2FE0A10000AB104A /* KeyboardController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardController.swift; sourceTree = "<group>"; };
+		70AB105A2FE0A10000AB105A /* TUCKeyboardTyper.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TUCKeyboardTyper.h; sourceTree = "<group>"; };
+		70AB106A2FE0A10000AB106A /* TUCKeyboardTyper.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TUCKeyboardTyper.m; sourceTree = "<group>"; };
+		70AB100A2FE0A10000AB100A /* FocusWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusWatcher.swift; sourceTree = "<group>"; };
 		70D2AFD02FC04E6400342757 /* DebugOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugOverlay.swift; sourceTree = "<group>"; };
 		70FC06B52FC07F4100AB7995 /* Digitizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Digitizer.swift; sourceTree = "<group>"; };
 		70FE7F8B2F858616005FF048 /* Icon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = Icon.icon; sourceTree = "<group>"; };
@@ -137,6 +151,11 @@
 				704B2C6829978B2900A1DE4D /* DebugView.swift */,
 				70FC06B52FC07F4100AB7995 /* Digitizer.swift */,
 				70D2AFCE2FC04C0800342757 /* HIDLocationID.swift */,
+				70AB100A2FE0A10000AB100A /* FocusWatcher.swift */,
+				70AB101A2FE0A10000AB101A /* KeyboardLayout.swift */,
+				70AB102A2FE0A10000AB102A /* KeyboardView.swift */,
+				70AB103A2FE0A10000AB103A /* KeyboardPanel.swift */,
+				70AB104A2FE0A10000AB104A /* KeyboardController.swift */,
 				7052F431298D2D280066014F /* Assets.xcassets */,
 				70FE7F8B2F858616005FF048 /* Icon.icon */,
 				7052F433298D2D280066014F /* MainMenu.xib */,
@@ -159,6 +178,8 @@
 				7052F457298D3A450066014F /* TUCTouchInputManager.h */,
 				7052F451298D2ECB0066014F /* TUCTouchInputManager-C.h */,
 				7052F458298D3A450066014F /* TUCTouchInputManager.m */,
+				70AB105A2FE0A10000AB105A /* TUCKeyboardTyper.h */,
+				70AB106A2FE0A10000AB106A /* TUCKeyboardTyper.m */,
 				7052F453298D30D10066014F /* HIDInterpreter.h */,
 				7052F454298D30D10066014F /* HIDInterpreter.c */,
 			);
@@ -180,6 +201,7 @@
 				701C965329C9E51500CA833C /* TUCScreen.h in Headers */,
 				7052F455298D30D10066014F /* HIDInterpreter.h in Headers */,
 				7052F459298D3A450066014F /* TUCTouchInputManager.h in Headers */,
+				70AB105B2FE0A10000AB105B /* TUCKeyboardTyper.h in Headers */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -287,6 +309,11 @@
 			files = (
 				70FC06B62FC07F4100AB7995 /* Digitizer.swift in Sources */,
 				70D2AFD12FC04E6400342757 /* DebugOverlay.swift in Sources */,
+				70AB100B2FE0A10000AB100B /* FocusWatcher.swift in Sources */,
+				70AB101B2FE0A10000AB101B /* KeyboardLayout.swift in Sources */,
+				70AB102B2FE0A10000AB102B /* KeyboardView.swift in Sources */,
+				70AB103B2FE0A10000AB103B /* KeyboardPanel.swift in Sources */,
+				70AB104B2FE0A10000AB104B /* KeyboardController.swift in Sources */,
 				70D2AFCF2FC04C0800342757 /* HIDLocationID.swift in Sources */,
 				704B2C6929978B2900A1DE4D /* DebugView.swift in Sources */,
 				7052F430298D2D280066014F /* AppDelegate.swift in Sources */,
@@ -302,6 +329,7 @@
 			files = (
 				701C965429C9E51500CA833C /* TUCScreen.m in Sources */,
 				704B2C6D2997B5A000A1DE4D /* TUCCursorUtilities.m in Sources */,
+				70AB106B2FE0A10000AB106B /* TUCKeyboardTyper.m in Sources */,
 				7052F456298D30D10066014F /* HIDInterpreter.c in Sources */,
 				702F2BA8298D448D00415DEA /* TUCTouch.m in Sources */,
 				7052F45A298D3A450066014F /* TUCTouchInputManager.m in Sources */,

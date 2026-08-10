@@ -39,6 +39,9 @@ class TouchUp: NSObject, ObservableObject {
     @Published var twoFingerDragAction: TwoFingerDragAction = .drag
     @Published var isSystemSwipeEnabled = true
 
+    @Published var isOnScreenKeyboardEnabled = false
+    @Published var isKeyboardAutoShowEnabled = false
+
     @Published var areAdditionalDigitizerRotationSettingsVisible = false
 
 
@@ -61,6 +64,13 @@ class TouchUp: NSObject, ObservableObject {
     @Published var isAccessibilityAccessGranted = false
 
 
+    /// The on-screen keyboard, for a machine that has no other one.
+    ///
+    /// Owned here rather than by the app delegate because the model is what learns that the user has
+    /// moved to a different panel, and the keyboard has to follow them.
+    private(set) var keyboard: KeyboardController!
+
+
     @objc func screenParametersDidChange() {
         // identify which screen is newly added.
         let oldScreenList = self.connectedScreens
@@ -78,6 +88,10 @@ class TouchUp: NSObject, ObservableObject {
 
         // The screen list was rebuilt, so any resolved mapping may have shifted.
         updateConnectionState()
+
+        // A keyboard on a screen that has just been unplugged, resized or rearranged is in the wrong
+        // place, and possibly off the desktop entirely.
+        keyboard?.repositionIfVisible()
     }
 
     
@@ -95,6 +109,13 @@ class TouchUp: NSObject, ObservableObject {
         report += "Hardware \(Self.hardwareModelIdentifier ?? "unknown")\n"
         report += "Accessibility access: \(isAccessibilityAccessGranted ? "granted" : "NOT GRANTED")\n\n"
         report += touchManager.diagnosticsReport()
+
+        // Whether we can see the focused control at all, which is what an on-screen keyboard has to
+        // know to open by itself. Included unconditionally: whether this read works from inside the
+        // sandbox, and in which applications, is the first question every report about the keyboard
+        // failing to appear will need answered.
+        report += "\n" + AXFocusProbe.probeFocusedElement().diagnosticsDescription
+        report += keyboard.diagnosticsDescription
 
         return report
     }
@@ -124,6 +145,8 @@ class TouchUp: NSObject, ObservableObject {
             && !isClickOnLiftEnabled
             && !isDraggingWithOneFingerEnabled
             && isClickWindowToFrontEnabled
+            && isOnScreenKeyboardEnabled
+            && isKeyboardAutoShowEnabled
             && holdDuration >= Self.tabletModeHoldDuration
             && tapDistance >= Self.tabletModeTapDistance
     }
@@ -170,6 +193,11 @@ class TouchUp: NSObject, ObservableObject {
         isSystemSwipeEnabled = true
         isCursorHiddenEnabled = true
 
+        // A tablet raises a keyboard when you tap somewhere you can type, and has no other one to
+        // fall back on.
+        isOnScreenKeyboardEnabled = true
+        isKeyboardAutoShowEnabled = true
+
         // On: tapping an app that is not focused should focus it and act on what you touched, in
         // one tap, which is what a tablet does. It was off while this worked by injecting a second
         // click, which made that tap actuate twice on some controls; it now activates the owning
@@ -204,9 +232,11 @@ class TouchUp: NSObject, ObservableObject {
 
         super.init()
 
+        self.keyboard = KeyboardController(model: self)
+
         self.loadDigitizerConfigs()
         self.screenParametersDidChange()
-        
+
         self.touchManager.delegate = self
         
         NotificationCenter.default.addObserver(self, selector: #selector(TouchUp.screenParametersDidChange), name: NSApplication.didChangeScreenParametersNotification, object: nil)
@@ -248,7 +278,12 @@ extension TouchUp {
             "isCursorHiddenEnabled" : false,
             "twoFingerDragAction" : TwoFingerDragAction.drag.rawValue,
             "isSystemSwipeEnabled" : true,
-            "areAdditionalDigitizerRotationSettingsVisible" : false
+            "areAdditionalDigitizerRotationSettingsVisible" : false,
+
+            // Off by default. A machine with a keyboard attached does not want a second one taking up
+            // the bottom of the screen, and there is no way from here to tell whether one is attached.
+            "isOnScreenKeyboardEnabled" : false,
+            "isKeyboardAutoShowEnabled" : true
         ])
         
         holdDuration = defaults.double(forKey: "holdDuration")
@@ -298,6 +333,19 @@ extension TouchUp {
         twoFingerDragAction = TwoFingerDragAction(rawValue: defaults.integer(forKey: "twoFingerDragAction")) ?? .drag
         isSystemSwipeEnabled = defaults.bool(forKey: "isSystemSwipeEnabled")
         areAdditionalDigitizerRotationSettingsVisible = defaults.bool(forKey: "areAdditionalDigitizerRotationSettingsVisible")
+        isOnScreenKeyboardEnabled = defaults.bool(forKey: "isOnScreenKeyboardEnabled")
+        isKeyboardAutoShowEnabled = defaults.bool(forKey: "isKeyboardAutoShowEnabled")
+
+        // The watcher costs a read every 0.4 s while it runs, so it only runs when both the keyboard
+        // and its automatic side are wanted. Put the keyboard away when the feature is turned off,
+        // rather than leaving one on screen that nothing can now close.
+        self.observers.append(contentsOf: [
+            Publishers.CombineLatest($isOnScreenKeyboardEnabled, $isKeyboardAutoShowEnabled)
+                .sink { [weak self] isEnabled, isAutomatic in
+                    self?.keyboard.isAutomatic = isEnabled && isAutomatic
+                    if !isEnabled { self?.keyboard.hide() }
+                }
+        ])
     }
     
     
@@ -322,6 +370,8 @@ extension TouchUp {
         defaults.set(twoFingerDragAction.rawValue, forKey: "twoFingerDragAction")
         defaults.set(isSystemSwipeEnabled, forKey: "isSystemSwipeEnabled")
         defaults.set(areAdditionalDigitizerRotationSettingsVisible, forKey: "areAdditionalDigitizerRotationSettingsVisible")
+        defaults.set(isOnScreenKeyboardEnabled, forKey: "isOnScreenKeyboardEnabled")
+        defaults.set(isKeyboardAutoShowEnabled, forKey: "isKeyboardAutoShowEnabled")
     }
 
 }
@@ -496,7 +546,13 @@ extension TouchUp: TUCTouchDelegate {
     func digitizerIsFlippedVertically(forLocationID locationID: UInt32) -> Bool {
         digitizerConfigs[locationID]?.isFlippedVertically ?? false
     }
-    
+
+    /// The user put a finger on a different panel. Anything showing on the glass should follow them
+    /// there rather than stay on a screen they have walked away from.
+    @objc func lastTouchedDigitizerDidChange(_ locationID: UInt32) {
+        keyboard.lastTouchedScreenDidChange()
+    }
+
     func action(for gesture: TUCCursorGesture) -> TUCCursorAction {
         switch gesture {
         case .TUCCursorGestureTouchDown:
@@ -631,6 +687,14 @@ extension TouchUp {
         case \.isExclusiveAccessEnabled:
             return("Exclusive Access",
                    "Take sole control of the touchscreen so macOS stops handling it too. Enable this if your screen still behaves like a trackpad, or if every touch seems to register twice. (EXPERIMENTAL)")
+
+        case \.isOnScreenKeyboardEnabled:
+            return("On-Screen Keyboard",
+                   "A keyboard along the bottom of the panel you last touched, for a machine with no keyboard attached. Its keys carry whatever your selected input source puts on them. A password field can ask macOS to stop accepting typed-in keystrokes, and no keyboard on screen can get around that — the keyboard says so when it happens.")
+
+        case \.isKeyboardAutoShowEnabled:
+            return("Open It When You Tap a Text Field",
+                   "Watches which control has focus, in any app, and raises the keyboard when that control accepts typing. Focus is something apps report voluntarily, so some report it late and a few not at all — the menu bar item always works, and the keyboard has a key to put itself away.")
 
         case \.isLongPressContextMenuEnabled:
             return("Long Press for Menu",

@@ -15,6 +15,7 @@
         <customObject id="Voe-Tx-rLC" customClass="AppDelegate" customModule="Touch_Up" customModuleProvider="target">
             <connections>
                 <outlet property="activationMenuItem" destination="K64-OB-c0t" id="YoM-eZ-cbc"/>
+                <outlet property="keyboardMenuItem" destination="KbD-01-aaa" id="KbD-03-ccc"/>
                 <outlet property="statusMenu" destination="tyf-0E-tmv" id="cHa-wC-jSB"/>
             </connections>
         </customObject>
@@ -66,6 +67,12 @@
                     <modifierMask key="keyEquivalentModifierMask"/>
                     <connections>
                         <action selector="toggleActivationMenu:" target="Voe-Tx-rLC" id="p6N-FK-sGU"/>
+                    </connections>
+                </menuItem>
+                <menuItem title="On-Screen Keyboard" id="KbD-01-aaa">
+                    <modifierMask key="keyEquivalentModifierMask"/>
+                    <connections>
+                        <action selector="toggleKeyboardMenu:" target="Voe-Tx-rLC" id="KbD-02-bbb"/>
                     </connections>
                 </menuItem>
                 <menuItem isSeparatorItem="YES" id="4je-JR-u6R"/>

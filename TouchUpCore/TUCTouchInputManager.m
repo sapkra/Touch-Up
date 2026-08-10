@@ -72,6 +72,8 @@
 /// reports that tapping does nothing, this is the difference between reading the code and knowing.
 @property NSMutableArray<NSString *> *recentGestureLog;
 
+@property (readwrite) uint32_t locationIDOfLastTouch;
+
 @end
 
 
@@ -535,6 +537,18 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
                                key:@"zeroed-lift"
                            message:@"reports zeroed coordinates on lift-off; keeping the last known position. "
                                     "This is the report `ignoreOriginTouches` used to discard, which left taps unable to click."];
+    }
+
+    // Which glass is being used, for interface that should follow the user's hands. Set from the
+    // same condition as the cursor touch below rather than from every report: a finger travelling
+    // across a panel is one touch, and a contact that is already gone tells us nothing about where
+    // anybody is.
+    if (isNewTouch && isOnSurface && self.locationIDOfLastTouch != locationID) {
+        self.locationIDOfLastTouch = locationID;
+
+        if ([self.delegate respondsToSelector:@selector(lastTouchedDigitizerDidChange:)]) {
+            [self.delegate lastTouchedDigitizerDidChange:locationID];
+        }
     }
 
     // A contact that is already gone the first time we see it has no position worth anything and

@@ -18,4 +18,5 @@ FOUNDATION_EXPORT const unsigned char TouchUpCoreVersionString[];
 #import<TouchUpCore/TUCTouchDelegate.h>
 #import<TouchUpCore/TUCTouch.h>
 #import<TouchUpCore/TUCScreen.h>
+#import<TouchUpCore/TUCKeyboardTyper.h>
 

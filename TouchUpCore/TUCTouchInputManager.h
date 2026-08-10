@@ -100,6 +100,16 @@ NS_ASSUME_NONNULL_BEGIN
 
 
 
+/**
+ The digitizer a finger last landed on, or 0 if none ever has.
+
+ For putting touch-driven interface where the user's hands are, on a machine with more than one
+ panel. Updated once per touch rather than per report, so it describes which glass is being used
+ rather than tracking a finger across it.
+ */
+@property (readonly) uint32_t locationIDOfLastTouch;
+
+
 - (CGPoint)convertScreenPointRelativeToAbsolute:(CGPoint)relativePoint locationID:(uint32_t)locationID;
 
 
