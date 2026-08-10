@@ -51,6 +51,10 @@
 /// recurs on every report is recorded once instead of flooding it.
 @property NSMutableSet<NSString *> *notedDeviceObservations;
 
+/// Watches for pointer movement that did not come from us, so a real mouse or trackpad brings the
+/// pointer back while `hidesCursor` is on.
+@property (strong) id foreignPointerMonitor;
+
 /// The last handful of touches and what each was decided to be. Small and always on: when someone
 /// reports that tapping does nothing, this is the difference between reading the code and knowing.
 @property NSMutableArray<NSString *> *recentGestureLog;
@@ -94,6 +98,13 @@ static const CGFloat kTwoFingerCommitDistance = 2.0;
  is far worse than having to sweep a little further.
  */
 static const CGFloat kSwipeCommitDistance = 25.0;
+
+/**
+ How long after our own last injected pointer event another pointer event is still assumed to be
+ ours. Covers the click, the release and the parking nudge, which all land just after the last
+ finger has left and so arrive with no touch on the glass to disown them.
+ */
+static const NSTimeInterval kForeignPointerGracePeriod = 0.2;
 
 
 static NSString *TUCNameForGesture(TUCCursorGesture gesture) {
@@ -167,6 +178,79 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     _hidesCursor = hidesCursor;
 
     [[TUCCursorUtilities sharedInstance] setIsCursorHidden:hidesCursor];
+
+    if (hidesCursor) {
+        [self startWatchingForForeignPointerMovement];
+    } else {
+        [self stopWatchingForForeignPointerMovement];
+    }
+}
+
+
+/**
+ Shows the pointer again as soon as something other than a finger moves it, and leaves it to the
+ next touch to hide it again.
+
+ Telling our own pointer movement from a real device's is the whole difficulty, and an earlier
+ attempt at this relied solely on the source stamp on our injected events. That stamp does survive
+ being read back through `NSEvent`, which is checkable, but whether it survives the round trip out
+ through the window server and back into a monitor is not checkable from in here — and when it did
+ not, every move we made looked foreign, so the pointer was shown mid-touch and hidden again on the
+ next report. It flickered through every touch.
+
+ So three independent tests have to agree that an event is not ours, and any one of them being
+ unreliable costs nothing:
+
+ - it does not carry our source stamp
+ - no finger is on the glass, since our pointer moves only ever happen because of a touch
+ - we did not inject a pointer event a moment ago, which covers the lift, the click and the
+   parking nudge that all land just after the last finger has gone
+ */
+- (void)startWatchingForForeignPointerMovement {
+    if (self.foreignPointerMonitor != nil) {
+        return;
+    }
+
+    NSEventMask mask = NSEventMaskMouseMoved | NSEventMaskLeftMouseDragged
+                     | NSEventMaskRightMouseDragged | NSEventMaskOtherMouseDragged;
+
+    __weak typeof(self) weakSelf = self;
+    self.foreignPointerMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:mask handler:^(NSEvent *event) {
+        [weakSelf showCursorIfPointerMovedBySomethingElse:event];
+    }];
+}
+
+
+- (void)showCursorIfPointerMovedBySomethingElse:(NSEvent *)event {
+    if (!self.hidesCursor) {
+        return;
+    }
+
+    CGEventRef cgEvent = event.CGEvent;
+    if (cgEvent != NULL
+        && CGEventGetIntegerValueField(cgEvent, kCGEventSourceUserData) == kTUCSyntheticEventUserData) {
+        return;
+    }
+
+    if ([[self activeTouches] count] > 0) {
+        return;
+    }
+
+    NSTimeInterval sinceOurLastMove = [NSDate timeIntervalSinceReferenceDate]
+        - [TUCCursorUtilities sharedInstance].timeOfLastSyntheticPointerEvent;
+    if (sinceOurLastMove < kForeignPointerGracePeriod) {
+        return;
+    }
+
+    [[TUCCursorUtilities sharedInstance] setIsCursorHidden:NO];
+}
+
+
+- (void)stopWatchingForForeignPointerMovement {
+    if (self.foreignPointerMonitor != nil) {
+        [NSEvent removeMonitor:self.foreignPointerMonitor];
+        self.foreignPointerMonitor = nil;
+    }
 }
 
 

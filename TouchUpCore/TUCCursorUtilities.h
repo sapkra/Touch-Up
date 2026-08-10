@@ -52,6 +52,11 @@ static const int64_t kTUCSyntheticEventUserData = 0x54554348; // 'TUCH'
 /// Reported in the diagnostics so a pointer that stubbornly reappears is explicable.
 @property (readonly) BOOL canHideCursorSystemWide;
 
+/// When we last injected an event that moves the pointer, as a `timeIntervalSinceReferenceDate`.
+/// Lets a caller recognise the tail of its own activity without relying on the source stamp
+/// surviving a round trip through the window server, which cannot be checked from inside.
+@property (readonly) NSTimeInterval timeOfLastSyntheticPointerEvent;
+
 /// Click state stamped on the most recent press: 1 single, 2 double, 3 triple. Reported in the
 /// diagnostics, because a click arriving as a double is indistinguishable from a click going
 /// missing if all you can see is that tapping did not do what you meant.

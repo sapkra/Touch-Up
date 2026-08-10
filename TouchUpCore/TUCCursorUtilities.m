@@ -15,6 +15,7 @@
 @property CGPoint locationOfLastClick;
 
 @property (readwrite) BOOL isLeftMouseDown;
+@property (readwrite) NSTimeInterval timeOfLastSyntheticPointerEvent;
 
 /// A scroll gesture is open: `kCGScrollPhaseBegan` has been posted and its `Ended` has not.
 @property BOOL isScrolling;
@@ -179,6 +180,23 @@ static Boolean TUCSetCursorHiddenInBackground(Boolean hidden) {
     if (event == NULL) return;
 
     CGEventSetIntegerValueField(event, kCGEventSourceUserData, kTUCSyntheticEventUserData);
+
+    // Only the events that actually move the pointer count as pointer activity. Scroll and
+    // momentum go out through here too, and a flick coasting for a second or more would otherwise
+    // look like continuous pointer activity and keep a real mouse from being noticed.
+    switch (CGEventGetType(event)) {
+        case kCGEventMouseMoved:
+        case kCGEventLeftMouseDown:
+        case kCGEventLeftMouseUp:
+        case kCGEventLeftMouseDragged:
+        case kCGEventRightMouseDown:
+        case kCGEventRightMouseUp:
+            self.timeOfLastSyntheticPointerEvent = [NSDate timeIntervalSinceReferenceDate];
+            break;
+        default:
+            break;
+    }
+
     CGEventPost(kCGHIDEventTap, event);
 }
 

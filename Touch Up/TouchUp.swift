@@ -624,7 +624,7 @@ extension TouchUp {
 
         case \.isCursorHiddenEnabled:
             return("Hide the Mouse Pointer",
-                   "There is no pointer on a tablet, and one that jumps to wherever you touched is the clearest reminder that you are steering a mouse. It stays hidden while this is on, including for a mouse — switch it off, or quit Touch Up, to get the pointer back.")
+                   "There is no pointer on a tablet, and one that jumps to wherever you touched is the clearest reminder that you are steering a mouse. Touching hides it; moving a mouse or trackpad brings it straight back, and the next touch hides it again.")
 
         case \.isExclusiveAccessEnabled:
             return("Exclusive Access",
