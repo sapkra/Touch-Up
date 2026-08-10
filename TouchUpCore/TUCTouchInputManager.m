@@ -807,16 +807,6 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     
     TUCCursorAction action = [self actionForGesture:gesture];
 
-    // `TouchDown` fires on every touch and would swamp the record; everything else is a decision.
-    if (gesture != TUCCursorGestureTouchDown) {
-        BOOL isClick = (action == TUCCursorActionClick || action == TUCCursorActionPointAndClick
-                        || action == TUCCursorActionMoveClickIfNeeded);
-        [self logGesture:[NSString stringWithFormat:@"  %@ -> %@%@",
-                          TUCNameForGesture(gesture), TUCNameForAction(action),
-                          isClick ? [NSString stringWithFormat:@" (click state %ld after)",
-                                     (long)[TUCCursorUtilities sharedInstance].lastClickCount] : @""]];
-    }
-    
     CGFloat doubleClickSpan = self.doubleClickTolerance * [[self touchscreenForLocationID:touch.locationID] pixelsPerMM];
     [[TUCCursorUtilities sharedInstance] setDoubleClickTolerance:doubleClickSpan];
     
@@ -893,6 +883,16 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
                 [utils stopMagnifying];
             }
             break;
+    }
+
+    // Recorded after the action has run, so a click reports the state actually stamped on its
+    // event rather than the one left over from the press before. `TouchDown` fires on every touch
+    // and would swamp the record; everything else here is a decision worth seeing.
+    if (gesture != TUCCursorGestureTouchDown) {
+        BOOL isClick = (action == TUCCursorActionClick || action == TUCCursorActionPointAndClick);
+        [self logGesture:[NSString stringWithFormat:@"  %@ -> %@%@",
+                          TUCNameForGesture(gesture), TUCNameForAction(action),
+                          isClick ? [NSString stringWithFormat:@" as click state %ld", (long)utils.lastClickCount] : @""]];
     }
 }
 
