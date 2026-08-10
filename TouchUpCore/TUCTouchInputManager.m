@@ -26,6 +26,7 @@
 @property (strong) NSDate *cursorTouchStationarySinceDate;
 @property BOOL cursorTouchDidActuatePress; // YES once this touch has put the mouse button down
 @property BOOL cursorTouchDidActuateLongPress; // YES once this touch has opened a context menu
+@property BOOL cursorTouchSawMultipleFingers; // YES if another finger was ever down alongside it
 @property NSTimeInterval cursorTouchBeganTime; // when the cursor touch landed, for concurrency tests
 
 /// Midpoint of three or more fingers when they were first all down, and whether their sweep has
@@ -33,6 +34,7 @@
 @property BOOL hasSwipeBaseline;
 @property CGPoint swipeBaselineMidpoint;
 @property BOOL didRecogniseSwipe;
+@property CGFloat swipeFurthestTravel; // mm, for the diagnostics when a sweep never commits
 
 /// Inter-finger spread and midpoint when the second finger arrived, in mm and relative
 /// coordinates. A two-finger gesture is pinch or pan depending on which of the two has moved
@@ -261,8 +263,16 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
 
     self.identifiedMultitouchGesture = _TUCCursorGestureNone;
     self.hasTwoFingerBaseline = NO;
+
+    if (self.hasSwipeBaseline && !self.didRecogniseSwipe) {
+        [self logGesture:[NSString stringWithFormat:
+                          @"  no sweep: furthest %.0f mm of the %.0f mm needed",
+                          self.swipeFurthestTravel, kSwipeCommitDistance]];
+    }
+
     self.hasSwipeBaseline = NO;
     self.didRecogniseSwipe = NO;
+    self.swipeFurthestTravel = 0;
 }
 
 
@@ -337,6 +347,7 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
         self.cursorTouchDidHold = NO;
         self.cursorTouchDidActuatePress = NO;
         self.cursorTouchDidActuateLongPress = NO;
+        self.cursorTouchSawMultipleFingers = NO;
         self.cursorTouchBeganTime = [NSDate timeIntervalSinceReferenceDate];
         self.cursorTouchStationaryAnchor = touch.location;
         self.cursorTouchStationarySinceDate = [NSDate date];
@@ -489,6 +500,26 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
 
     [self updateHoldState];
 
+    // A second finger anywhere in this touch means the lift is not a plain click, whether or not a
+    // gesture was ever identified from it.
+    if (touches.count >= 2) {
+        self.cursorTouchSawMultipleFingers = YES;
+    }
+
+    // Three or more fingers are a gesture of the whole hand, so they are read here — ahead of
+    // everything that branches on the cursor touch's phase. Below the stationary branch, as this
+    // used to be, a swipe was only ever evaluated on reports where the *first* finger down happened
+    // to be registering movement; if that one was the anchor of the sweep, the gesture was invisible.
+    if (touches.count >= 3) {
+        [self recogniseSwipeWithTouches:touches];
+        return;
+    }
+
+    // Fingers leaving after a multi-finger gesture. Nothing they do on the way out is input.
+    if (self.cursorTouchSawMultipleFingers && self.hasSwipeBaseline) {
+        return;
+    }
+
 
     if (phase == NSTouchPhaseBegan) {
         [self performMouseEventForGesture:TUCCursorGestureTouchDown];
@@ -497,7 +528,9 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
 
 
     else if (phase == NSTouchPhaseStationary) {
-        [self checkForSecondaryClick];
+        if (touches.count <= 2) {
+            [self checkForSecondaryClick];
+        }
 
         return;
     }
@@ -532,7 +565,9 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
             if (self.cursorTouchDidActuateLongPress) {
                 // The menu is already open; the lift is not a click.
             } else if (self.cursorTouchQualifiedForTap) {
-                if (!didActuatePress) {
+                // Putting three fingers down and lifting them again is not a click, however little
+                // the first one moved.
+                if (!didActuatePress && !self.cursorTouchSawMultipleFingers) {
                     [self performMouseEventForGesture:TUCCursorGestureTap];
                 }
             } else {
@@ -573,21 +608,12 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
         return;
     }
     
-    if ([self checkForSecondaryClick]) {
+    if (touches.count <= 2 && [self checkForSecondaryClick]) {
         return;
     }
     
     // Once a swipe has been acted on, the rest of the hand-down is just fingers leaving. Without
     // this, dropping from three fingers back through two would start a drag on the way out.
-    if (self.didRecogniseSwipe) {
-        return;
-    }
-
-    if ([touches count] >= 3) {
-        [self recogniseSwipeWithTouches:touches];
-        return;
-    }
-
     if ([touches count] == 2 && [touches containsObject: cursorTouch]) {
         TUCTouch *otherTouch = touches[1];
         if (otherTouch.uuid == cursorTouch.uuid) {
@@ -663,6 +689,10 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     if (!self.hasSwipeBaseline) {
         self.hasSwipeBaseline = YES;
         self.swipeBaselineMidpoint = midpoint;
+        self.swipeFurthestTravel = 0;
+
+        [self logGesture:[NSString stringWithFormat:@"%lu fingers down, watching for a sweep",
+                          (unsigned long)touches.count]];
 
         // Three fingers supersede whatever one or two were doing. Deliberately not
         // `stopCurrentGesture`, which would clear the baseline just set here and loop.
@@ -679,7 +709,10 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     CGFloat travelX = (midpoint.x - self.swipeBaselineMidpoint.x) * physicalSize.width;
     CGFloat travelY = (midpoint.y - self.swipeBaselineMidpoint.y) * physicalSize.height;
 
-    if (MAX(fabs(travelX), fabs(travelY)) < kSwipeCommitDistance) {
+    CGFloat travel = MAX(fabs(travelX), fabs(travelY));
+    self.swipeFurthestTravel = MAX(self.swipeFurthestTravel, travel);
+
+    if (travel < kSwipeCommitDistance) {
         return;
     }
 
