@@ -54,6 +54,14 @@ static const CGFloat kHoldStillnessTolerance = 1.0;
  */
 static const CGFloat kPhaseMovementThreshold = 0.1;
 
+/**
+ How close (mm) a second finger has to tap to the resting one to mean a secondary click. Measured
+ as a true radius — the old proximity helper normalised each axis separately and then compared
+ against the horizontal one, which on a portrait panel stretched the vertical reach by the whole
+ aspect ratio.
+ */
+static const CGFloat kSecondFingerProximity = 60.0;
+
 
 @implementation TUCTouchInputManager
 
@@ -555,35 +563,63 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
 }
 
 
+/**
+ Detects the secondary-click gesture: a second finger tapped down and up again close to the one
+ that is resting on the glass.
+
+ The second finger has to have been on the glass *at the same time* as the resting one. Ended
+ touches stay in `touchSet` for half a second after they lift — long enough for the previous,
+ finished tap to still be sitting there — and this used to accept any of them. Since the only
+ thing excluding them was a differing contact ID, and controllers routinely hand out a fresh ID
+ for each touch, tapping twice near the same spot inside half a second turned the second tap into
+ a right-click. On a resting finger the check runs on the very first stationary report, so it beat
+ the tap to it every time.
+ */
 - (BOOL)checkForSecondaryClick {
-    //    if (self.identifiedMultitouchGesture != _TUCCursorGestureNone) {
-    //        return NO;
-    //    }
-    
-    NSSet<TUCTouch *> *touchesInProximity = [self touchesInProximityTo:self.cursorTouch.location maxDistance:60 locationID:self.cursorTouch.locationID];
-    if (touchesInProximity.count >= 2 && self.identifiedMultitouchGesture == _TUCCursorGestureNone) {
-        
-        // TUCCursorGestureTwoFingerTap
-        NSPredicate *p1 = [NSPredicate predicateWithFormat:@"phase == %d", NSTouchPhaseEnded];
-        NSPredicate *p2 = [NSPredicate predicateWithFormat:@"phase == %d", NSTouchPhaseCancelled];
-        
-        NSPredicate *p3 = [NSPredicate predicateWithFormat:@"contactID != %d", self.cursorTouch.contactID];
-        
-        NSPredicate *p4 = [NSCompoundPredicate orPredicateWithSubpredicates:@[p1, p2]];
-        NSPredicate *p5 = [NSCompoundPredicate andPredicateWithSubpredicates:@[p3, p4]];
-        
-        NSSet<TUCTouch *> *endedTouches = [touchesInProximity filteredSetUsingPredicate:p5];
-        
-        if (endedTouches.count == 1) {
-            for (TUCTouch* touchToRemove in endedTouches) {
-                [self removeTouch:touchToRemove now:YES];
-            }
-            
-            [self performMouseEventForGesture:TUCCursorGestureTapSecondFinger];
-            return YES;
-        }
+    TUCTouch *cursorTouch = self.cursorTouch;
+    if (cursorTouch == nil || self.identifiedMultitouchGesture != _TUCCursorGestureNone) {
+        return NO;
     }
-    return NO;
+
+    TUCScreen *screen = [self touchscreenForLocationID:cursorTouch.locationID];
+    if (screen == nil) {
+        return NO;
+    }
+
+    // A second finger that lifted is only interesting for as long as its report is still current.
+    // Anything older belonged to a previous gesture, not this one.
+    NSInteger currentFrame = [self currentFrameIDForLocationID:cursorTouch.locationID];
+    NSInteger oldestConcurrentFrame = currentFrame - (self.errorResistance + 2);
+
+    TUCTouch *secondFinger = nil;
+    NSUInteger candidateCount = 0;
+
+    for (TUCTouch *touch in self.touchSet) {
+        if (touch.locationID != cursorTouch.locationID) continue;
+        if (touch.uuid == cursorTouch.uuid) continue;
+
+        if ([screen millimetreDistanceBetweenRelativePoint:touch.location
+                                                       and:cursorTouch.location] > kSecondFingerProximity) {
+            continue;
+        }
+
+        BOOL hasLifted = (touch.phase == NSTouchPhaseEnded || touch.phase == NSTouchPhaseCancelled);
+        if (!hasLifted || touch.lastUpdated < oldestConcurrentFrame) {
+            continue;
+        }
+
+        candidateCount++;
+        secondFinger = touch;
+    }
+
+    // Exactly one, or it is not the gesture — several fingers lifting together is something else.
+    if (candidateCount != 1) {
+        return NO;
+    }
+
+    [self removeTouch:secondFinger now:YES];
+    [self performMouseEventForGesture:TUCCursorGestureTapSecondFinger];
+    return YES;
 }
 
 
@@ -707,27 +743,6 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
 }
 
 
-/**
- maxDistance in mm
- */
-- (NSSet<TUCTouch *> *)touchesInProximityTo:(CGPoint)point maxDistance:(CGFloat)mmDistance locationID:(uint32_t)locationID {
-    
-    TUCScreen *screen = [self touchscreenForLocationID:locationID];
-    CGFloat screenDistance = mmDistance * [screen pixelsPerMM];
-    CGPoint distance = CGPointMake(screenDistance / screen.frame.size.width,
-                                   screenDistance / screen.frame.size.height);
-    
-    NSPredicate * predicate = [NSPredicate predicateWithBlock: ^BOOL(TUCTouch *t, NSDictionary *bind) {
-        if (t.locationID != locationID) return NO;
-
-        CGFloat dx = [t location].x - point.x;
-        CGFloat dy = [t location].y - point.y;
-
-        return sqrt( pow(dx, 2) + pow(dy, 2) ) < distance.x;
-    }];
-    
-    return [self.touchSet filteredSetUsingPredicate:predicate];
-}
 
 
 /**
