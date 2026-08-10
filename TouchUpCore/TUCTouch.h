@@ -57,6 +57,12 @@ typedef NS_ENUM(NSUInteger, TUCCursorAction) {
 
 @property NSInteger lastUpdated; // the page ID during last update
 
+/// Wall-clock time of the last report for this touch, as a `timeIntervalSinceReferenceDate`.
+/// `lastUpdated` counts HID reports, which only advance while the device has something to say —
+/// so it measures activity, not elapsed time, and cannot answer "was this touch on the glass at
+/// the same moment as that one".
+@property NSTimeInterval lastUpdatedTime;
+
 
 - (instancetype)initWithContactID:(NSInteger)contactID locationID:(uint32_t)locationID;
 

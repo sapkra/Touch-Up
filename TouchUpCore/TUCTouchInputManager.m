@@ -24,6 +24,7 @@
 @property (strong) NSDate *cursorTouchStationarySinceDate;
 @property BOOL cursorTouchDidActuatePress; // YES once this touch has put the mouse button down
 @property BOOL cursorTouchDidActuateLongPress; // YES once this touch has opened a context menu
+@property NSTimeInterval cursorTouchBeganTime; // when the cursor touch landed, for concurrency tests
 
 /// Inter-finger spread and midpoint when the second finger arrived, in mm and relative
 /// coordinates. A two-finger gesture is pinch or pan depending on which of the two has moved
@@ -294,6 +295,7 @@ static const CGFloat kTwoFingerCommitDistance = 2.0;
         self.cursorTouchDidHold = NO;
         self.cursorTouchDidActuatePress = NO;
         self.cursorTouchDidActuateLongPress = NO;
+        self.cursorTouchBeganTime = [NSDate timeIntervalSinceReferenceDate];
         self.cursorTouchStationaryAnchor = touch.location;
         self.cursorTouchStationarySinceDate = [NSDate date];
     }
@@ -301,6 +303,7 @@ static const CGFloat kTwoFingerCommitDistance = 2.0;
     [touch setIsOnSurface:isOnSurface];
     [touch setConfidenceFlag:confidenceFlag];
     [touch setLastUpdated:[self currentFrameIDForLocationID:locationID]];
+    [touch setLastUpdatedTime:[NSDate timeIntervalSinceReferenceDate]];
     
     if (!isOnSurface) {
         [touch setPhase: NSTouchPhaseEnded];
@@ -633,10 +636,14 @@ static const CGFloat kTwoFingerCommitDistance = 2.0;
         return NO;
     }
 
-    // A second finger that lifted is only interesting for as long as its report is still current.
-    // Anything older belonged to a previous gesture, not this one.
-    NSInteger currentFrame = [self currentFrameIDForLocationID:cursorTouch.locationID];
-    NSInteger oldestConcurrentFrame = currentFrame - (self.errorResistance + 2);
+    // The second finger has to have been on the glass at the same time as this one, which is true
+    // exactly when its last report came in after this touch landed.
+    //
+    // An earlier attempt at this compared HID frame counters, which is wrong for a reason worth
+    // recording: that counter advances once per report, so a gap of six frames is six reports and
+    // not six milliseconds. Between two taps the device reports nothing at all, so the previous
+    // tap stayed permanently "within six frames" of the next one and every second tap in quick
+    // succession opened a menu instead of clicking. A counter of activity is not a clock.
 
     TUCTouch *secondFinger = nil;
     NSUInteger candidateCount = 0;
@@ -651,7 +658,7 @@ static const CGFloat kTwoFingerCommitDistance = 2.0;
         }
 
         BOOL hasLifted = (touch.phase == NSTouchPhaseEnded || touch.phase == NSTouchPhaseCancelled);
-        if (!hasLifted || touch.lastUpdated < oldestConcurrentFrame) {
+        if (!hasLifted || touch.lastUpdatedTime < self.cursorTouchBeganTime) {
             continue;
         }
 

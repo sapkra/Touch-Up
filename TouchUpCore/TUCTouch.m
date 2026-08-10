@@ -27,6 +27,7 @@
         
         
         _lastUpdated = 0;
+        _lastUpdatedTime = [NSDate timeIntervalSinceReferenceDate];
         
         
         _phase = NSTouchPhaseBegan;
