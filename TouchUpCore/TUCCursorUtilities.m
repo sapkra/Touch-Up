@@ -15,13 +15,32 @@
 
 @property (readwrite) BOOL isLeftMouseDown;
 
-@property CGPoint momentumScrollTranslation;
+/// A scroll gesture is open: `kCGScrollPhaseBegan` has been posted and its `Ended` has not.
+@property BOOL isScrolling;
+/// Smoothed finger speed in points per second, used to seed a flick when the finger lifts.
+@property CGPoint scrollVelocity;
+@property NSTimeInterval timeOfLastScroll;
+
+/// Speed the flick is currently coasting at, in points per second.
+@property CGPoint momentumVelocity;
 @property (strong) NSTimer *momentumScrollTimer;
 
 @property BOOL isMagnifying;
 @property CGFloat lastPinchDistance;
 
 @end
+
+/// Momentum is stepped at display rate so a flick looks continuous rather than stepped.
+static const NSTimeInterval kMomentumFrameInterval = 1.0 / 60.0;
+
+/// Fraction of the speed that survives one momentum step. Tuned for a time constant near 0.3 s,
+/// which lands close to how far the system's own flicks carry.
+static const CGFloat kMomentumDecayPerFrame = 0.95;
+
+/// Points per second below which a flick is finished. Carrying on past this only smears the last
+/// pixel around and delays the gesture ending.
+static const CGFloat kMomentumMinimumSpeed = 30.0;
+
 
 @implementation TUCCursorUtilities
 
@@ -217,44 +236,151 @@
 
 
 
-- (void)scroll:(CGPoint)translation phase:(NSTouchPhase)phase {
-    [self stopDraggingCursor];
-    
-    CGEventRef event = CGEventCreateScrollWheelEvent2(NULL, kCGScrollEventUnitPixel, 2, translation.y, translation.x, 0);
-    
-    CGEventPost(kCGHIDEventTap, event);
-    CFRelease(event);
-    
-    if (phase == NSTouchPhaseEnded) {
-        // TODO: consider sampling rate of digitizer and screen refresh rate
-        [self cancelMomentumScroll];
-        
-        self.momentumScrollTimer = [NSTimer scheduledTimerWithTimeInterval:0.01 target:self selector:@selector(updateMomentumScroll) userInfo:nil repeats:YES];
-    } else {
-        self.momentumScrollTranslation = translation;
+/**
+ Emits one continuous scroll event.
+
+ The phase fields are what make this a scroll *gesture* rather than a mouse wheel tick. Without
+ them macOS treats every event as a discrete wheel notch, which costs rubber-band overscroll,
+ makes momentum something we have to fake in full, and makes apps that distinguish the two —
+ Safari, Maps, Preview — fall back to their wheel behaviour. That is the single biggest reason
+ dragging a finger here has never felt like dragging one on a tablet.
+
+ A gesture and a flick are mutually exclusive: momentum events carry `kCGScrollPhaseNone` and
+ gesture events carry no momentum phase, which is the convention `CGEventTypes.h` documents.
+ */
+- (CGEventRef)createContinuousScrollEventWithTranslation:(CGPoint)translation CF_RETURNS_RETAINED {
+    // The sign is deliberately the raw screen-space delta, so content follows the finger the way
+    // it does on a tablet: drag down and the page comes down with you. This ignores the macOS
+    // "Natural scrolling" preference on purpose — on glass you are holding the content, not
+    // pushing a scroll wheel, and inverting that never feels right.
+    CGEventRef event = CGEventCreateScrollWheelEvent2(NULL, kCGScrollEventUnitPixel, 2,
+                                                      translation.y, translation.x, 0);
+    if (event) {
+        CGEventSetIntegerValueField(event, kCGScrollWheelEventIsContinuous, 1);
     }
+    return event;
 }
 
+
+/// One event of an in-progress gesture. Momentum phase is left at zero: `CGEventTypes.h` treats a
+/// gesture event and a momentum event as mutually exclusive.
+- (void)postGestureScrollTranslation:(CGPoint)translation phase:(CGScrollPhase)scrollPhase {
+    CGEventRef event = [self createContinuousScrollEventWithTranslation:translation];
+    if (!event) return;
+
+    CGEventSetIntegerValueField(event, kCGScrollWheelEventScrollPhase, scrollPhase);
+
+    CGEventPost(kCGHIDEventTap, event);
+    CFRelease(event);
+}
+
+
+/// One event of a flick coasting after the finger has gone. Scroll phase is left at zero, which is
+/// how the system distinguishes momentum from a gesture the user is still driving.
+- (void)postMomentumScrollTranslation:(CGPoint)translation phase:(CGMomentumScrollPhase)momentumPhase {
+    CGEventRef event = [self createContinuousScrollEventWithTranslation:translation];
+    if (!event) return;
+
+    CGEventSetIntegerValueField(event, kCGScrollWheelEventMomentumPhase, momentumPhase);
+
+    CGEventPost(kCGHIDEventTap, event);
+    CFRelease(event);
+}
+
+
+- (void)scroll:(CGPoint)translation phase:(NSTouchPhase)phase {
+    [self stopDraggingCursor];
+
+    if (phase == NSTouchPhaseEnded || phase == NSTouchPhaseCancelled) {
+        [self endScrollGesture];
+        return;
+    }
+
+    if (!self.isScrolling) {
+        // A fresh drag supersedes whatever the previous flick was still coasting through.
+        [self cancelMomentumScroll];
+
+        self.isScrolling = YES;
+        self.scrollVelocity = CGPointZero;
+        [self postGestureScrollTranslation:translation phase:kCGScrollPhaseBegan];
+    } else {
+        [self postGestureScrollTranslation:translation phase:kCGScrollPhaseChanged];
+    }
+
+    // Track speed over time rather than keeping the last delta: reports do not arrive at a fixed
+    // rate, and the very last one before the finger leaves the glass is the noisiest there is —
+    // seeding a flick from it alone is what makes momentum shoot off or die on the spot.
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    NSTimeInterval elapsed = now - self.timeOfLastScroll;
+
+    if (elapsed > 0 && elapsed < 0.1) {
+        const CGFloat smoothing = 0.35;
+        self.scrollVelocity = CGPointMake(self.scrollVelocity.x * (1 - smoothing) + (translation.x / elapsed) * smoothing,
+                                         self.scrollVelocity.y * (1 - smoothing) + (translation.y / elapsed) * smoothing);
+    }
+    self.timeOfLastScroll = now;
+}
+
+
+- (void)endScrollGesture {
+    if (!self.isScrolling) {
+        return;
+    }
+    self.isScrolling = NO;
+
+    [self postGestureScrollTranslation:CGPointZero phase:kCGScrollPhaseEnded];
+
+    if (hypot(self.scrollVelocity.x, self.scrollVelocity.y) < kMomentumMinimumSpeed) {
+        return;
+    }
+
+    // macOS does not generate inertia for injected events, so the decay is still ours — but
+    // labelled as momentum, a view integrates it as a flick and rubber-bands out of it, instead
+    // of receiving a burst of wheel notches.
+    self.momentumVelocity = self.scrollVelocity;
+    [self postMomentumWithPhase:kCGMomentumScrollPhaseBegin];
+
+    self.momentumScrollTimer = [NSTimer scheduledTimerWithTimeInterval:kMomentumFrameInterval
+                                                               target:self
+                                                             selector:@selector(updateMomentumScroll)
+                                                             userInfo:nil
+                                                              repeats:YES];
+}
 
 
 - (void)updateMomentumScroll {
-    self.momentumScrollTranslation = CGPointMake(self.momentumScrollTranslation.x * 0.985,
-                                                 self.momentumScrollTranslation.y * 0.985);
-    
-    if (fabs(self.momentumScrollTranslation.x) < 0.1 && fabs(self.momentumScrollTranslation.y) < 0.1) {
+    self.momentumVelocity = CGPointMake(self.momentumVelocity.x * kMomentumDecayPerFrame,
+                                        self.momentumVelocity.y * kMomentumDecayPerFrame);
+
+    if (hypot(self.momentumVelocity.x, self.momentumVelocity.y) < kMomentumMinimumSpeed) {
         [self cancelMomentumScroll];
+        return;
     }
-    
-    [self scroll:self.momentumScrollTranslation phase:NSTouchPhaseMoved];
+
+    [self postMomentumWithPhase:kCGMomentumScrollPhaseContinue];
 }
 
 
+- (void)postMomentumWithPhase:(CGMomentumScrollPhase)momentumPhase {
+    CGPoint step = CGPointMake(self.momentumVelocity.x * kMomentumFrameInterval,
+                               self.momentumVelocity.y * kMomentumFrameInterval);
+
+    [self postMomentumScrollTranslation:step phase:momentumPhase];
+}
+
 
 - (void)cancelMomentumScroll {
-    if (self.momentumScrollTimer != nil) {
-        [self.momentumScrollTimer invalidate];
-        self.momentumScrollTimer = nil;
+    if (self.momentumScrollTimer == nil) {
+        return;
     }
+
+    [self.momentumScrollTimer invalidate];
+    self.momentumScrollTimer = nil;
+    self.momentumVelocity = CGPointZero;
+
+    // Close the phase. A view left waiting for the end of a flick that has already stopped will
+    // not settle back out of an overscroll.
+    [self postMomentumScrollTranslation:CGPointZero phase:kCGMomentumScrollPhaseEnd];
 }
 
 
