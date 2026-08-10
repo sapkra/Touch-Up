@@ -75,35 +75,69 @@ static const CGFloat kMomentumMinimumSpeed = 30.0;
  `CoreDisplay_DisplayCreateInfoDictionary` — if it ever disappears, hiding simply becomes
  app-scoped rather than the app failing to launch.
  */
-static Boolean TUCSetCursorHiddenInBackground(Boolean hidden) {
-    typedef int (*ConnectionIDFunc)(void);
-    typedef int (*SetPropertyFunc)(int cid, CFStringRef key, CFTypeRef value);
+typedef int TUCConnectionID;
+typedef TUCConnectionID (*TUCConnectionIDFunc)(void);
 
-    static ConnectionIDFunc defaultConnection;
-    static SetPropertyFunc setProperty;
+/// Four parameters, and the connection is passed twice — once as the caller and once as the target.
+/// Getting this wrong does not fail to link or to resolve: the arguments simply land in the wrong
+/// registers, and the first thing the function does is retain what it believes is a CFTypeRef.
+typedef int32_t (*TUCSetConnectionPropertyFunc)(TUCConnectionID cid,
+                                                TUCConnectionID targetCID,
+                                                CFStringRef key,
+                                                CFTypeRef value);
+
+
+static void TUCLookUpCursorBackgroundHook(TUCConnectionIDFunc *outConnection,
+                                          TUCSetConnectionPropertyFunc *outSetProperty) {
+    static TUCConnectionIDFunc connection;
+    static TUCSetConnectionPropertyFunc setProperty;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        defaultConnection = (ConnectionIDFunc)dlsym(RTLD_DEFAULT, "_CGSDefaultConnection");
-        if (defaultConnection == NULL) {
-            defaultConnection = (ConnectionIDFunc)dlsym(RTLD_DEFAULT, "CGSMainConnectionID");
+        connection = (TUCConnectionIDFunc)dlsym(RTLD_DEFAULT, "_CGSDefaultConnection");
+        if (connection == NULL) {
+            connection = (TUCConnectionIDFunc)dlsym(RTLD_DEFAULT, "CGSMainConnectionID");
         }
-        setProperty = (SetPropertyFunc)dlsym(RTLD_DEFAULT, "CGSSetConnectionProperty");
+        setProperty = (TUCSetConnectionPropertyFunc)dlsym(RTLD_DEFAULT, "CGSSetConnectionProperty");
     });
 
-    if (defaultConnection == NULL || setProperty == NULL) {
+    *outConnection = connection;
+    *outSetProperty = setProperty;
+}
+
+
+static Boolean TUCCursorBackgroundHookIsAvailable(void) {
+    TUCConnectionIDFunc connection = NULL;
+    TUCSetConnectionPropertyFunc setProperty = NULL;
+    TUCLookUpCursorBackgroundHook(&connection, &setProperty);
+
+    return connection != NULL && setProperty != NULL;
+}
+
+
+static Boolean TUCSetCursorHiddenInBackground(Boolean hidden) {
+    TUCConnectionIDFunc connection = NULL;
+    TUCSetConnectionPropertyFunc setProperty = NULL;
+    TUCLookUpCursorBackgroundHook(&connection, &setProperty);
+
+    if (connection == NULL || setProperty == NULL) {
         return false;
     }
 
-    CFStringRef key = CFSTR("SetsCursorInBackground");
+    TUCConnectionID cid = connection();
+    if (cid == 0) {
+        return false;
+    }
+
     CFBooleanRef value = hidden ? kCFBooleanTrue : kCFBooleanFalse;
-    return setProperty(defaultConnection(), key, value) == 0;
+    return setProperty(cid, cid, CFSTR("SetsCursorInBackground"), value) == 0;
 }
 
 
 - (BOOL)canHideCursorSystemWide {
-    // Probing costs nothing and is idempotent: setting the property to its current meaning has no
-    // effect beyond telling us whether the symbols resolved.
-    return TUCSetCursorHiddenInBackground(self.isCursorHidden) ? YES : NO;
+    // Availability is answered by whether the symbols resolved, never by making the call. This
+    // used to probe by writing the property, which meant simply asking the question — as the
+    // diagnostics report does — performed a private API call for no reason.
+    return TUCCursorBackgroundHookIsAvailable() ? YES : NO;
 }
 
 
