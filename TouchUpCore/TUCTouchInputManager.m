@@ -359,12 +359,11 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
  Evaluated on every report regardless of phase: on a noisy digitizer the phase flickers
  between moved and stationary, and a hold must not depend on catching a stationary one.
 
- This is also the first moment in a touch at which the gesture is no longer ambiguous — a
- scroll or a pinch would have moved by now — and therefore the earliest point at which the
- button may safely be pressed while the finger is still down. `TUCCursorGestureLongPress` is
- posted exactly once here to offer that; whether it actuates anything is up to the delegate's
- mapping, since holding the button for the length of the touch is a different interaction
- model from clicking on lift-off.
+ Recognising the hold deliberately emits nothing by itself. Holding still is how a tablet asks
+ for a context menu, and it is also how it asks to pick something up — which of the two it turns
+ out to be is only known once the finger either moves or leaves, so both decisions belong at
+ lift-off. Pressing the mouse button here instead, which is what this used to do, commits to the
+ drag before the user has said anything.
  */
 - (void)updateHoldState {
     if (self.cursorTouchDidHold
@@ -375,7 +374,6 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
 
     if ([[NSDate date] timeIntervalSinceDate:self.cursorTouchStationarySinceDate] > self.holdDuration) {
         self.cursorTouchDidHold = YES;
-        [self performMouseEventForGesture:TUCCursorGestureLongPress];
     }
 }
 
@@ -445,20 +443,34 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
                                         "touch that simply stopped being reported is being treated as a tap."];
         }
 
+        // What the touch turns out to have been is only decidable now, which is the whole reason
+        // nothing is emitted when the hold is first recognised:
+        //
+        //   never left the slop, brief          -> a tap
+        //   never left the slop, held           -> a long press: a context menu, as on a tablet
+        //   left the slop after holding still   -> picking something up, i.e. a drag
+        //   left the slop straight away         -> a scroll
         if (!wasMultitouchGesture && !wasLostMidGesture) {
-            if (self.cursorTouchDidHold) {
+            if (self.cursorTouchQualifiedForTap) {
+                // A hold with nothing mapped to it still has to click, or holding a moment too
+                // long over a button would silently do nothing at all.
+                BOOL longPressDoesSomething =
+                    [self actionForGesture:TUCCursorGestureLongPress] != TUCCursorActionNone;
+
+                if (self.cursorTouchDidHold && longPressDoesSomething) {
+                    [self performMouseEventForGesture:TUCCursorGestureLongPress];
+                } else if (!didActuatePress) {
+                    [self performMouseEventForGesture:TUCCursorGestureTap];
+                }
+
+            } else if (self.cursorTouchDidHold) {
                 [self performMouseEventForGesture:TUCCursorGestureHoldAndDrag];
-            } else if (!self.cursorTouchQualifiedForTap) {
+            } else {
                 [self performMouseEventForGesture:TUCCursorGestureDrag];
             }
         }
 
         [self stopCurrentGesture];
-
-        if (!wasMultitouchGesture && !wasLostMidGesture
-            && self.cursorTouchQualifiedForTap && !didActuatePress) {
-            [self performMouseEventForGesture:TUCCursorGestureTap];
-        }
 
         return;
     }

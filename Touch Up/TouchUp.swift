@@ -33,7 +33,7 @@ class TouchUp: NSObject, ObservableObject {
     @Published var isClickWindowToFrontEnabled = false
     @Published var isClickOnLiftEnabled = false
     @Published var isDraggingWithOneFingerEnabled = false
-    @Published var isPressAndHoldEnabled = false
+    @Published var isLongPressContextMenuEnabled = false
     @Published var isExclusiveAccessEnabled = false
     @Published var isCursorHiddenEnabled = false
 
@@ -113,7 +113,7 @@ class TouchUp: NSObject, ObservableObject {
     /// instead of leaving a stored flag disagreeing with what the app actually does.
     var isTabletModeActive: Bool {
         isScrollingWithOneFingerEnabled
-            && isPressAndHoldEnabled
+            && isLongPressContextMenuEnabled
             && isSecondaryClickEnabled
             && isMagnificationEnabled
             && isCursorHiddenEnabled
@@ -127,15 +127,15 @@ class TouchUp: NSObject, ObservableObject {
     /// used to trigger by accident.
     static let tabletModeHoldDuration: TimeInterval = 0.5
 
-    /// One finger scrolls the content, a tap clicks, a long press picks things up, two fingers tap
-    /// for a secondary click and pinch to zoom — and no pointer. The individual settings stay
-    /// editable underneath; this only puts them in the right places at once.
+    /// One finger scrolls the content, a tap clicks, a long press opens the right-click menu,
+    /// holding then moving drags, two fingers tap for a secondary click and pinch to zoom — and no
+    /// pointer. The individual settings stay editable underneath.
     func activateTabletMode() {
         isScrollingWithOneFingerEnabled = true
         isClickOnLiftEnabled = false
         isDraggingWithOneFingerEnabled = false
 
-        isPressAndHoldEnabled = true
+        isLongPressContextMenuEnabled = true
         isSecondaryClickEnabled = true
         isMagnificationEnabled = true
         isCursorHiddenEnabled = true
@@ -205,7 +205,7 @@ extension TouchUp {
             "isClickWindowToFrontEnabled" : false,
             "isClickOnLiftEnabled" : false,
             "isDraggingWithOneFingerEnabled" : false,
-            "isPressAndHoldEnabled" : false,
+            "isLongPressContextMenuEnabled" : false,
             "isExclusiveAccessEnabled" : false,
             "isCursorHiddenEnabled" : false,
             "areAdditionalDigitizerRotationSettingsVisible" : false
@@ -242,7 +242,7 @@ extension TouchUp {
         isClickWindowToFrontEnabled = defaults.bool(forKey: "isClickWindowToFrontEnabled")
         isClickOnLiftEnabled = defaults.bool(forKey: "isClickOnLiftEnabled")
         isDraggingWithOneFingerEnabled = defaults.bool(forKey: "isDraggingWithOneFingerEnabled")
-        isPressAndHoldEnabled = defaults.bool(forKey: "isPressAndHoldEnabled")
+        isLongPressContextMenuEnabled = defaults.bool(forKey: "isLongPressContextMenuEnabled")
         isExclusiveAccessEnabled = defaults.bool(forKey: "isExclusiveAccessEnabled")
         isCursorHiddenEnabled = defaults.bool(forKey: "isCursorHiddenEnabled")
         areAdditionalDigitizerRotationSettingsVisible = defaults.bool(forKey: "areAdditionalDigitizerRotationSettingsVisible")
@@ -264,7 +264,7 @@ extension TouchUp {
         defaults.set(isClickWindowToFrontEnabled, forKey: "isClickWindowToFrontEnabled")
         defaults.set(isClickOnLiftEnabled, forKey: "isClickOnLiftEnabled")
         defaults.set(isDraggingWithOneFingerEnabled, forKey: "isDraggingWithOneFingerEnabled")
-        defaults.set(isPressAndHoldEnabled, forKey: "isPressAndHoldEnabled")
+        defaults.set(isLongPressContextMenuEnabled, forKey: "isLongPressContextMenuEnabled")
         defaults.set(isExclusiveAccessEnabled, forKey: "isExclusiveAccessEnabled")
         defaults.set(isCursorHiddenEnabled, forKey: "isCursorHiddenEnabled")
         defaults.set(areAdditionalDigitizerRotationSettingsVisible, forKey: "areAdditionalDigitizerRotationSettingsVisible")
@@ -452,12 +452,11 @@ extension TouchUp: TUCTouchDelegate {
             return .click
             
         case .TUCCursorGestureLongPress:
-            // Posted once the resting finger has made the gesture unambiguous. Mapping it to a
-            // drag presses the button there and holds it until lift-off, which is what apps
-            // expecting a real press-and-hold need; the lift-off click is suppressed in that
-            // case so the touch still actuates exactly once. Off by default, because it turns
-            // a long rest into a held button rather than the click it produces today.
-            return isPressAndHoldEnabled ? .drag : .none
+            // Posted when a finger held still is then lifted without ever moving. On a tablet
+            // that is the gesture for a context menu, which is a secondary click here. Holding
+            // and then moving is a different thing entirely and arrives as `HoldAndDrag`, so
+            // picking something up still works.
+            return isLongPressContextMenuEnabled ? .secondaryClick : .none
 
         case .TUCCursorGestureDrag:
             if isClickOnLiftEnabled { return .pointAndClick }
@@ -556,9 +555,9 @@ extension TouchUp {
             return("Exclusive Access",
                    "Take sole control of the touchscreen so macOS stops handling it too. Enable this if your screen still behaves like a trackpad, or if every touch seems to register twice. (EXPERIMENTAL)")
 
-        case \.isPressAndHoldEnabled:
-            return("Press and Hold",
-                   "Hold the mouse button down for as long as your finger rests on the screen, instead of clicking once you lift it. Needed by apps that react to a button being held. (EXPERIMENTAL)")
+        case \.isLongPressContextMenuEnabled:
+            return("Long Press for Menu",
+                   "Hold your finger still and lift it to open the right-click menu, the way a long press does on a tablet. Holding and then moving still picks things up and drags them.")
             
         case \.holdDuration:
             return("Hold Duration",

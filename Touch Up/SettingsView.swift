@@ -44,7 +44,7 @@ struct SettingsView: View {
     var tabletModeRow: some View {
         HStack(alignment: .top) {
             SettingsExplanationLabel(labels: ("iPad Mode",
-                                              "One finger scrolls, a tap clicks, a long press picks things up, two fingers tap for a secondary click, and pinch zooms — with no mouse pointer. Sets the options below; you can still change any of them afterwards."))
+                                              "One finger scrolls, a tap clicks, a long press opens the right-click menu, holding then moving drags, and pinch zooms — with no mouse pointer. Sets the options below; you can still change any of them afterwards."))
 
             Spacer(minLength: 8)
 
@@ -93,8 +93,8 @@ struct SettingsView: View {
                 SettingsExplanationLabel(labels: model.uiLabels(for: \.isMagnificationEnabled))
             }
             
-            Toggle(isOn: $model.isPressAndHoldEnabled) {
-                SettingsExplanationLabel(labels: model.uiLabels(for: \.isPressAndHoldEnabled))
+            Toggle(isOn: $model.isLongPressContextMenuEnabled) {
+                SettingsExplanationLabel(labels: model.uiLabels(for: \.isLongPressContextMenuEnabled))
             }
 
             Toggle(isOn: $model.isCursorHiddenEnabled) {
