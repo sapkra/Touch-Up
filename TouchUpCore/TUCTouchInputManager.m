@@ -1034,9 +1034,14 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
             [utils moveCursorTo:screenLocation];
             if ([self isLocationOutsideFrontmostWindow:screenLocation locationID:touch.locationID]) {
                 // Not `performClickAt:`. This click is ours, not the user's: it exists only to
-                // raise the window, and it must stay outside the click sequence so that the
-                // real click the same tap produces on lift-off is still counted as the first.
+                // raise the window, and it must stay outside the click sequence.
                 [utils bringWindowToFrontAt:screenLocation];
+
+                // It is still a complete press and release delivered where the finger landed, so
+                // the tap has already actuated whatever is under it. Letting the lift add its own
+                // click on top means one tap presses a button twice, or toggles a checkbox back to
+                // where it started — which is worse than the un-raised window it set out to fix.
+                self.cursorTouchDidActuatePress = YES;
             }
 
             break;
