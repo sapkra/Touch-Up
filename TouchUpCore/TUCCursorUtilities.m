@@ -465,6 +465,28 @@ static Boolean TUCSetCursorHiddenInBackground(Boolean hidden) {
 }
 
 
+/**
+ Closes an open scroll gesture without handing off a flick, reporting it as cancelled.
+
+ `kCGScrollPhaseCancelled` says exactly what happened: the gesture turned out to be something
+ else. A view that receives it settles out of any overscroll instead of waiting for an end that
+ is never coming.
+
+ Idempotent, and safe to call after `-endScrollGesture` has already run — which is what makes it
+ usable as a catch-all on every path a touch can finish by.
+ */
+- (void)cancelScrollGesture {
+    if (!self.isScrolling) {
+        return;
+    }
+
+    self.isScrolling = NO;
+    self.scrollVelocity = CGPointZero;
+
+    [self postGestureScrollTranslation:CGPointZero phase:kCGScrollPhaseCancelled];
+}
+
+
 - (void)endScrollGesture {
     if (!self.isScrolling) {
         return;
@@ -473,14 +495,17 @@ static Boolean TUCSetCursorHiddenInBackground(Boolean hidden) {
 
     [self postGestureScrollTranslation:CGPointZero phase:kCGScrollPhaseEnded];
 
-    if (hypot(self.scrollVelocity.x, self.scrollVelocity.y) < kMomentumMinimumSpeed) {
+    CGPoint flickVelocity = self.scrollVelocity;
+    self.scrollVelocity = CGPointZero;
+
+    if (hypot(flickVelocity.x, flickVelocity.y) < kMomentumMinimumSpeed) {
         return;
     }
 
     // macOS does not generate inertia for injected events, so the decay is still ours — but
     // labelled as momentum, a view integrates it as a flick and rubber-bands out of it, instead
     // of receiving a burst of wheel notches.
-    self.momentumVelocity = self.scrollVelocity;
+    self.momentumVelocity = flickVelocity;
     [self postMomentumWithPhase:kCGMomentumScrollPhaseBegin];
 
     self.momentumScrollTimer = [NSTimer scheduledTimerWithTimeInterval:kMomentumFrameInterval

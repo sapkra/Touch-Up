@@ -76,6 +76,10 @@ static const int64_t kTUCSyntheticEventUserData = 0x54554348; // 'TUCH'
 
 - (void)scroll:(CGPoint)translation phase:(NSTouchPhase)phase;
 
+/// Closes an open scroll gesture as cancelled, without a flick. Idempotent, so it can be used as a
+/// catch-all wherever a touch finishes by a route that did not end the scroll itself.
+- (void)cancelScrollGesture;
+
 - (void)magnifyLocationA:(CGPoint)p1 locationB:(CGPoint)p2 relativeP1:(CGPoint)r1 relP2:(CGPoint)r2;
 - (void)stopMagnifying;
 

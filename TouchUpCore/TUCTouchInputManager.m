@@ -500,6 +500,11 @@ static const CGFloat kTwoFingerCommitDistance = 2.0;
 
         [self stopCurrentGesture];
 
+        // The normal lift already ended the scroll and handed off its flick, so this is a no-op
+        // there. It exists for the routes that skip that entirely — a multitouch gesture having
+        // taken over, or a touch lost mid-drag — which otherwise left the gesture open for good.
+        [[TUCCursorUtilities sharedInstance] cancelScrollGesture];
+
         // Only while the pointer is hidden. Moving a pointer the user can see, just after they
         // touched somewhere, would be its own kind of wrong.
         if (self.hidesCursor) {
@@ -604,6 +609,11 @@ static const CGFloat kTwoFingerCommitDistance = 2.0;
     // Claiming a gesture nothing is mapped to would only suppress everything else.
     if ([self actionForGesture:candidate] != TUCCursorActionNone) {
         self.identifiedMultitouchGesture = candidate;
+
+        // Whatever one finger had started is now superseded, and it is this gesture's job to say
+        // so — nothing further down will, because every remaining path checks
+        // `identifiedMultitouchGesture` first and skips.
+        [[TUCCursorUtilities sharedInstance] cancelScrollGesture];
     }
 }
 
