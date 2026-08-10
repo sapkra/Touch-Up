@@ -59,14 +59,11 @@
 
 /// Watches for pointer movement that did not come from us, so a real mouse or trackpad brings the
 /// pointer back while `hidesCursor` is on.
-@property (strong) id foreignPointerMonitor;
-
-/// Polls the pointer's position while it is hidden. The monitor above only sees events that are
-/// delivered to it, and the devices that matter most here — a built-in trackpad among them — are
-/// refused before registration precisely because they must not be driven, so their input never
-/// reaches this process at all. Comparing where the pointer *is* against where we put it needs
-/// nothing to be delivered by anyone.
+/// Runs while the pointer is hidden, comparing where it is against where we last observed it to be
+/// after moving it ourselves.
 @property (strong) NSTimer *pointerWatchTimer;
+@property CGPoint expectedPointerLocation;
+@property BOOL hasPointerBaseline;
 
 /// The last handful of touches and what each was decided to be. Small and always on: when someone
 /// reports that tapping does nothing, this is the difference between reading the code and knowing.
@@ -218,25 +215,55 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
 
 #pragma mark - Cursor Visibility
 
+/**
+ Hiding the pointer is easy. Knowing when to bring it back is the whole problem, and it has now been
+ attempted three ways:
+
+ 1. A source stamp on our own injected events, filtered in a global event monitor. The stamp does
+    survive being read back through `NSEvent` — that much is measurable — but whether it survives the
+    round trip out through the window server and back into a monitor cannot be established from
+    inside this process. When it did not, every move we made looked foreign and the pointer flickered
+    on and off through every touch.
+ 2. The other device's own HID reports. A trackpad is refused before registration, by vendor and by
+    transport, precisely because driving one is the thing that must never happen — so its input never
+    arrives here at all, and the device that prompted the feature is the one device that mechanism
+    could never see.
+ 3. Watching where the pointer actually is. Which is this, because it is the only signal in reach
+    that depends on nothing being delivered to anybody: we know where we last put the pointer, and if
+    it is somewhere else then something else moved it. True of a trackpad, a mouse, another app
+    warping it, anything.
+ */
+
 @synthesize hidesCursor = _hidesCursor;
 
 - (void)setHidesCursor:(BOOL)hidesCursor {
     _hidesCursor = hidesCursor;
 
     [[TUCCursorUtilities sharedInstance] setIsCursorHidden:hidesCursor];
+    [self logGesture:hidesCursor ? @"pointer hidden (setting on)" : @"pointer shown (setting off)"];
 
     if (hidesCursor) {
-        [self startWatchingForForeignPointerMovement];
+        [self startWatchingPointerPosition];
     } else {
-        [self stopWatchingForForeignPointerMovement];
+        [self stopWatchingPointerPosition];
     }
 }
 
 
+/**
+ Runs for as long as the pointer is hidden — the invariant being that a hidden pointer always has
+ something watching for the input that should bring it back.
+
+ It used to be started only when a touch hid the pointer, which left the case that actually gets hit
+ first completely uncovered: switching the setting on hides the pointer straight away, so until the
+ glass had been touched at least once nothing was watching, and a trackpad had no way to reveal it.
+ */
 - (void)startWatchingPointerPosition {
     if (self.pointerWatchTimer != nil) {
         return;
     }
+
+    self.hasPointerBaseline = NO;
 
     __weak typeof(self) weakSelf = self;
     self.pointerWatchTimer = [NSTimer scheduledTimerWithTimeInterval:kPointerWatchInterval
@@ -250,6 +277,7 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
 - (void)stopWatchingPointerPosition {
     [self.pointerWatchTimer invalidate];
     self.pointerWatchTimer = nil;
+    self.hasPointerBaseline = NO;
 }
 
 
@@ -261,80 +289,33 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
         return;
     }
 
-    // Mid-touch the pointer is ours by definition, and we are moving it constantly.
-    if ([self hasActiveTouchOnPointerDrivingDigitizer]) {
-        return;
-    }
+    CGPoint current = [utils currentCursorLocation];
 
-    CGPoint now = [utils currentCursorLocation];
-    CGPoint ours = utils.lastSyntheticPointerLocation;
-
-    if (hypot(now.x - ours.x, now.y - ours.y) > kPointerMovedTolerance) {
-        [utils setIsCursorHidden:NO];
-        [self stopWatchingPointerPosition];
-    }
-}
-
-
-/**
- Shows the pointer again as soon as something other than a finger moves it, and leaves it to the
- next touch to hide it again.
-
- Telling our own pointer movement from a real device's is the whole difficulty, and an earlier
- attempt at this relied solely on the source stamp on our injected events. That stamp does survive
- being read back through `NSEvent`, which is checkable, but whether it survives the round trip out
- through the window server and back into a monitor is not checkable from in here — and when it did
- not, every move we made looked foreign, so the pointer was shown mid-touch and hidden again on the
- next report. It flickered through every touch.
-
- So three independent tests have to agree that an event is not ours, and any one of them being
- unreliable costs nothing:
-
- - it does not carry our source stamp
- - no finger is on the glass, since our pointer moves only ever happen because of a touch
- - we did not inject a pointer event a moment ago, which covers the lift, the click and the
-   parking nudge that all land just after the last finger has gone
- */
-- (void)startWatchingForForeignPointerMovement {
-    if (self.foreignPointerMonitor != nil) {
-        return;
-    }
-
-    NSEventMask mask = NSEventMaskMouseMoved | NSEventMaskLeftMouseDragged
-                     | NSEventMaskRightMouseDragged | NSEventMaskOtherMouseDragged;
-
-    __weak typeof(self) weakSelf = self;
-    self.foreignPointerMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:mask handler:^(NSEvent *event) {
-        [weakSelf showCursorIfPointerMovedBySomethingElse:event];
-    }];
-}
-
-
-- (void)showCursorIfPointerMovedBySomethingElse:(NSEvent *)event {
-    if (!self.hidesCursor) {
-        return;
-    }
-
-    CGEventRef cgEvent = event.CGEvent;
-    if (cgEvent != NULL
-        && CGEventGetIntegerValueField(cgEvent, kCGEventSourceUserData) == kTUCSyntheticEventUserData) {
-        return;
-    }
-
-    // Contacts on a device that is not driving the pointer say nothing about whether a real one is
-    // being used — and a hand resting on a trackpad would otherwise keep the pointer hidden for as
-    // long as it stayed there.
-    if ([self hasActiveTouchOnPointerDrivingDigitizer]) {
-        return;
-    }
-
+    // While we are the ones moving it, whatever the pointer is doing is ours by definition. That
+    // covers a touch in progress, and for a moment afterwards the click, the release and the parking
+    // nudge, which all land just after the last finger has gone.
     NSTimeInterval sinceOurLastMove = [NSDate timeIntervalSinceReferenceDate]
-        - [TUCCursorUtilities sharedInstance].timeOfLastSyntheticPointerEvent;
-    if (sinceOurLastMove < kForeignPointerGracePeriod) {
+        - utils.timeOfLastSyntheticPointerEvent;
+    BOOL weAreMovingIt = [self hasActiveTouchOnPointerDrivingDigitizer]
+                      || sinceOurLastMove < kForeignPointerGracePeriod;
+
+    // Baselining from where the pointer is observed to be, rather than from the coordinate we asked
+    // for, is what makes this trustworthy: the window server clamps and rounds what it is given, so a
+    // requested position can differ from the real one and read as somebody else's move.
+    if (weAreMovingIt || !self.hasPointerBaseline) {
+        self.hasPointerBaseline = YES;
+        self.expectedPointerLocation = current;
         return;
     }
 
-    [[TUCCursorUtilities sharedInstance] setIsCursorHidden:NO];
+    if (hypot(current.x - self.expectedPointerLocation.x,
+              current.y - self.expectedPointerLocation.y) <= kPointerMovedTolerance) {
+        return;
+    }
+
+    [utils setIsCursorHidden:NO];
+    [self logGesture:@"pointer shown (something else moved it)"];
+    [self stopWatchingPointerPosition];
 }
 
 
@@ -345,16 +326,6 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
         }
     }
     return NO;
-}
-
-
-- (void)stopWatchingForForeignPointerMovement {
-    if (self.foreignPointerMonitor != nil) {
-        [NSEvent removeMonitor:self.foreignPointerMonitor];
-        self.foreignPointerMonitor = nil;
-    }
-
-    [self stopWatchingPointerPosition];
 }
 
 

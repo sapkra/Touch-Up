@@ -90,8 +90,9 @@ NS_ASSUME_NONNULL_BEGIN
 
  Touching hides it. Moving a mouse or trackpad brings it back, and the next touch hides it again,
  so a pointing device is always visible while it is being used and never otherwise. Telling our own
- injected movement from a real device's is what makes that hard; see
- `-showCursorIfPointerMovedBySomethingElse:` for how it is decided and why one test is not enough.
+ movement of the pointer from another device's is what makes that hard; see
+ `-checkWhetherSomethingElseMovedThePointer` for how it is decided, and for the two mechanisms that
+ were tried before it and could not be verified.
 
  Always restore this before the app exits; the underlying calls are process-scoped and there is
  nothing to clean up after a crash.

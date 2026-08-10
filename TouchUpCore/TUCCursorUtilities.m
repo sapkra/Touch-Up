@@ -17,7 +17,6 @@
 
 @property (readwrite) BOOL isLeftMouseDown;
 @property (readwrite) NSTimeInterval timeOfLastSyntheticPointerEvent;
-@property (readwrite) CGPoint lastSyntheticPointerLocation;
 
 /// A scroll gesture is open: `kCGScrollPhaseBegan` has been posted and its `Ended` has not.
 @property BOOL isScrolling;
@@ -194,7 +193,6 @@ static Boolean TUCSetCursorHiddenInBackground(Boolean hidden) {
         case kCGEventRightMouseDown:
         case kCGEventRightMouseUp:
             self.timeOfLastSyntheticPointerEvent = [NSDate timeIntervalSinceReferenceDate];
-            self.lastSyntheticPointerLocation = CGEventGetLocation(event);
             break;
         default:
             break;
