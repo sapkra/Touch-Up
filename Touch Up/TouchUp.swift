@@ -23,7 +23,7 @@ class TouchUp: NSObject, ObservableObject {
     
     @Published var holdDuration: TimeInterval = 0.1
     @Published var doubleClickDistance: CGFloat = 3 //mm
-    @Published var tapDistance: CGFloat = 5 //mm
+    @Published var tapDistance: CGFloat = 2.5 //mm
     @Published var errorResistance: NSInteger = 0 // num of Reports to wait before cancelling a touch
     @Published var ignoreOriginTouches: Bool = false
     
@@ -135,8 +135,9 @@ class TouchUp: NSObject, ObservableObject {
     static let tabletModeHoldDuration: TimeInterval = 0.7
 
     /// How far a finger may slide and still be a tap. Anything past it is a scroll, and a scroll
-    /// produces no click, so a value tuned for a phone quietly stops a large panel clicking at all.
-    static let tabletModeTapDistance: CGFloat = 5
+    /// produces no click. Wide enough to absorb a finger settling on the glass, narrow enough that
+    /// scrolling still starts where you expect it to.
+    static let tabletModeTapDistance: CGFloat = 3
 
     /// Two taps this far apart still count as a double click. Generous, because pointing precision
     /// scales with the panel.
@@ -230,7 +231,7 @@ extension TouchUp {
         defaults.register(defaults: [
             "holdDuration" : 0.1,
             "doubleClickDistance" : 8,
-            "tapDistance" : 5,
+            "tapDistance" : 2.5,
             "errorResistance" : 4,
             "ignoreOriginTouches" : true,
 
@@ -253,16 +254,17 @@ extension TouchUp {
         // selectable while the distance check was broken and therefore inert, so a stored 0 is
         // not a deliberate choice — lift it to the smallest value the slider now offers.
         doubleClickDistance = max(1, defaults.double(forKey: "doubleClickDistance"))
-        // 2.5 mm was the previous default and is tuned for phone-sized pointing. A tap on a large
-        // panel, made with the whole arm rather than a thumb, drifts further than that — and any
-        // drift past this radius becomes a scroll instead of a click, which is why taps sometimes
-        // only moved the pointer. Treat exactly the old default as "never chosen" and lift it.
+        // Only the unusable floor is corrected here. Widening the default was a guess at why taps
+        // were not clicking, and the guess was wrong: the cause was a digitizer emitting spurious
+        // reports at the origin, which move the touch to the corner of the screen no matter how
+        // wide the zone is. A zone below 2 mm still cannot work, since a finger settling on the
+        // glass shifts the contact further than that, so those are lifted.
         // Anything under 2 mm is smaller than the shift a finger makes just settling onto the
         // glass, so every touch becomes a scroll and nothing ever clicks. It used to be selectable,
         // so lift a stored value up rather than leaving someone stuck with a screen that ignores
         // them. 2.5 was the old default and was never a deliberate choice either.
         let storedTapDistance = defaults.double(forKey: "tapDistance")
-        tapDistance = (storedTapDistance < 2 || storedTapDistance == 2.5) ? 5 : storedTapDistance
+        tapDistance = (storedTapDistance < 2) ? 2.5 : storedTapDistance
         errorResistance = defaults.integer(forKey: "errorResistance")
         ignoreOriginTouches = defaults.bool(forKey: "ignoreOriginTouches")
 

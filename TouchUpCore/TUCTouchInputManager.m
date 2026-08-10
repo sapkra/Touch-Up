@@ -280,10 +280,31 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     // `errorResistance` reports and is cancelled instead, so the tap the user just made produces
     // no click at all — only the cursor move from touch-down. Turning the option on to fix
     // spurious touches therefore broke clicking for exactly the devices that need it.
-    BOOL isSuspectOriginReport = self.ignoreOriginTouches && CGPointEqualToPoint(digitizerPoint, CGPointZero);
+    BOOL isOriginReport = CGPointEqualToPoint(digitizerPoint, CGPointZero);
+    BOOL isSuspectOriginReport = self.ignoreOriginTouches && isOriginReport;
 
     if (isSuspectOriginReport && isOnSurface) {
+        [self noteOnceForLocationID:locationID
+                               key:@"origin-noise-dropped"
+                           message:@"reports occasional touches at the exact origin while a finger "
+                                    "is down. Ignore Origin Touches is on, so they are being dropped."];
         return;
+    }
+
+    // The same reports with the option off are not harmless, and this is the single most useful
+    // thing this transcript can say. A spurious origin report is processed like a real move, so the
+    // touch appears to leap to the very corner of the screen: that is further than the tap zone, so
+    // the tap is disqualified and produces no click, and the pointer lands in the top-left corner
+    // where it trips the menu bar and hot corners. From the outside it looks like clicking is
+    // broken and the Dock appears at random, with nothing connecting either to a setting.
+    if (isOriginReport && isOnSurface && !self.ignoreOriginTouches) {
+        [self noteOnceForLocationID:locationID
+                               key:@"origin-noise-processed"
+                           message:@"is reporting touches at the exact origin while a finger is "
+                                    "down, and Ignore Origin Touches is OFF. Each one moves the "
+                                    "touch to the corner of the screen, which disqualifies the tap "
+                                    "so it never clicks, and throws the pointer into the top-left "
+                                    "corner. TURN ON Ignore Origin Touches."];
     }
 
     // Touching hides the pointer again after a mouse brought it back. Cheap to do per report: the
