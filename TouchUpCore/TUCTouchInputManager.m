@@ -415,15 +415,17 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
                                     "corner. TURN ON Ignore Origin Touches."];
     }
 
-    // Touching hides the pointer again after a mouse brought it back. Cheap to do per report: the
-    // setter is a no-op unless the state actually changes.
+    // Only the digitizer that drives the pointer may hide it. A finger arriving on any *other*
+    // digitizer is a pointing device being used, so it does the opposite and brings the pointer
+    // back — which is the whole answer for a built-in trackpad, since matching was broadened to
+    // include devices that call themselves trackpads and its reports come through here too.
     //
-    // Only for a digitizer that is actually driving the pointer. Matching was broadened to include
-    // devices that call themselves trackpads, so a built-in trackpad can end up registered here
-    // even though it is not allowed to produce input — and hiding the pointer the moment a finger
-    // lands on it is precisely backwards.
-    if (self.hidesCursor && isOnSurface && TouchDeviceDrivesPointer(locationID)) {
-        [[TUCCursorUtilities sharedInstance] setIsCursorHidden:YES];
+    // Deciding this from the HID reports we already receive needs nothing to be inferred: no
+    // guessing whether an event came from us, no monitor that has to be delivered to. Cheap to do
+    // per report, since the setter is a no-op unless the state actually changes.
+    if (self.hidesCursor && isOnSurface) {
+        BOOL isTheTouchscreen = TouchDeviceDrivesPointer(locationID);
+        [[TUCCursorUtilities sharedInstance] setIsCursorHidden:isTheTouchscreen];
     }
 
     BOOL isNewTouch = NO;

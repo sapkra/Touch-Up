@@ -7,6 +7,7 @@
 
 #import "TUCCursorUtilities.h"
 #import <dlfcn.h>
+#import <Carbon/Carbon.h> // virtual key codes
 
 @interface TUCCursorUtilities ()
 
@@ -637,6 +638,21 @@ static Boolean TUCSetCursorHiddenInBackground(Boolean hidden) {
 
 
 - (void)pressKey:(CGKeyCode)keyCode modifiers:(CGEventFlags)modifiers {
+    // An arrow key pressed on a real keyboard carries these two alongside whatever the user is
+    // holding, and the system matches its shortcuts against the whole flag set. Without them a
+    // synthetic Control-arrow does not match "move left a space", and an unmatched key combination
+    // is what makes macOS play the error sound.
+    switch (keyCode) {
+        case kVK_LeftArrow:
+        case kVK_RightArrow:
+        case kVK_UpArrow:
+        case kVK_DownArrow:
+            modifiers |= kCGEventFlagMaskNumericPad | kCGEventFlagMaskSecondaryFn;
+            break;
+        default:
+            break;
+    }
+
     CGEventRef keyDown = CGEventCreateKeyboardEvent(NULL, keyCode, true);
     CGEventSetFlags(keyDown, modifiers);
     [self postSyntheticEvent:keyDown];
