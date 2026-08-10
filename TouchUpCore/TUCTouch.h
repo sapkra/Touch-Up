@@ -19,7 +19,14 @@ typedef NS_OPTIONS(NSUInteger, TUCCursorGesture) {
     TUCCursorGestureHoldAndDrag     = 1 << 5,
     TUCCursorGestureTapSecondFinger = 1 << 6,
     TUCCursorGestureTwoFingerDrag   = 1 << 7,
-    TUCCursorGesturePinch           = 1 << 8  // internal: pinch cannot be remapped
+    TUCCursorGesturePinch           = 1 << 8, // internal: pinch cannot be remapped
+
+    // Three or more fingers travelling together. Direction is in the gesture rather than passed
+    // alongside it so each one can be mapped separately, the way the trackpad pane does.
+    TUCCursorGestureSwipeLeft       = 1 << 9,
+    TUCCursorGestureSwipeRight      = 1 << 10,
+    TUCCursorGestureSwipeUp         = 1 << 11,
+    TUCCursorGestureSwipeDown       = 1 << 12
 };
 
 
@@ -32,7 +39,13 @@ typedef NS_ENUM(NSUInteger, TUCCursorAction) {
     TUCCursorActionClick,
     TUCCursorActionSecondaryClick,
     TUCCursorActionScroll,
-    TUCCursorActionMagnify
+    TUCCursorActionMagnify,
+
+    // Whole-system navigation, delivered as the keyboard shortcuts macOS already assigns to it.
+    TUCCursorActionSpacePrevious,
+    TUCCursorActionSpaceNext,
+    TUCCursorActionMissionControl,
+    TUCCursorActionApplicationWindows
 };
 
 

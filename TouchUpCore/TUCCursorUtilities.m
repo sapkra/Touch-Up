@@ -604,6 +604,19 @@ static Boolean TUCSetCursorHiddenInBackground(Boolean hidden) {
 }
 
 
+- (void)pressKey:(CGKeyCode)keyCode modifiers:(CGEventFlags)modifiers {
+    CGEventRef keyDown = CGEventCreateKeyboardEvent(NULL, keyCode, true);
+    CGEventSetFlags(keyDown, modifiers);
+    [self postSyntheticEvent:keyDown];
+    CFRelease(keyDown);
+
+    CGEventRef keyUp = CGEventCreateKeyboardEvent(NULL, keyCode, false);
+    CGEventSetFlags(keyUp, modifiers);
+    [self postSyntheticEvent:keyUp];
+    CFRelease(keyUp);
+}
+
+
 - (void)magnifyLocationA:(CGPoint)p1 locationB:(CGPoint)p2 relativeP1:(CGPoint)r1 relP2:(CGPoint)r2 {
     [self stopDraggingCursor];
     

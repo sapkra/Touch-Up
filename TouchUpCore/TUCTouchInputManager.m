@@ -10,6 +10,8 @@
 #import "HIDInterpreter.h"
 #import "TUCCursorUtilities.h"
 
+#import <Carbon/Carbon.h> // key codes for the system navigation shortcuts
+
 @interface TUCTouchInputManager ()
 
 @property NSMutableDictionary<NSNumber *, NSNumber *> *frameIDsByLocationID;
@@ -25,6 +27,12 @@
 @property BOOL cursorTouchDidActuatePress; // YES once this touch has put the mouse button down
 @property BOOL cursorTouchDidActuateLongPress; // YES once this touch has opened a context menu
 @property NSTimeInterval cursorTouchBeganTime; // when the cursor touch landed, for concurrency tests
+
+/// Midpoint of three or more fingers when they were first all down, and whether their sweep has
+/// already been acted on.
+@property BOOL hasSwipeBaseline;
+@property CGPoint swipeBaselineMidpoint;
+@property BOOL didRecogniseSwipe;
 
 /// Inter-finger spread and midpoint when the second finger arrived, in mm and relative
 /// coordinates. A two-finger gesture is pinch or pan depending on which of the two has moved
@@ -77,6 +85,13 @@ static const CGFloat kSecondFingerProximity = 60.0;
  costs a few milliseconds and gets it right.
  */
 static const CGFloat kTwoFingerCommitDistance = 2.0;
+
+/**
+ How far (mm) three or more fingers have to sweep before it counts as a swipe. Generous, because
+ the command it fires is disruptive — switching space by accident while resting a hand on the glass
+ is far worse than having to sweep a little further.
+ */
+static const CGFloat kSwipeCommitDistance = 25.0;
 
 
 @implementation TUCTouchInputManager
@@ -242,6 +257,8 @@ static const CGFloat kTwoFingerCommitDistance = 2.0;
 
     self.identifiedMultitouchGesture = _TUCCursorGestureNone;
     self.hasTwoFingerBaseline = NO;
+    self.hasSwipeBaseline = NO;
+    self.didRecogniseSwipe = NO;
 }
 
 
@@ -522,6 +539,17 @@ static const CGFloat kTwoFingerCommitDistance = 2.0;
         return;
     }
     
+    // Once a swipe has been acted on, the rest of the hand-down is just fingers leaving. Without
+    // this, dropping from three fingers back through two would start a drag on the way out.
+    if (self.didRecogniseSwipe) {
+        return;
+    }
+
+    if ([touches count] >= 3) {
+        [self recogniseSwipeWithTouches:touches];
+        return;
+    }
+
     if ([touches count] == 2 && [touches containsObject: cursorTouch]) {
         TUCTouch *otherTouch = touches[1];
         if (otherTouch.uuid == cursorTouch.uuid) {
@@ -564,6 +592,68 @@ static const CGFloat kTwoFingerCommitDistance = 2.0;
     }
 
     [self performMouseEventForGesture:TUCCursorGestureDrag];
+}
+
+
+/**
+ Recognises a three-or-more-finger sweep and fires it once.
+
+ macOS builds these from a trackpad's raw multitouch stream inside the window server, so there is
+ nothing an application can post that reproduces them directly. What it does expose is the set of
+ keyboard shortcuts already bound to the same commands, which is what the actions here use — the
+ result is the command without the interactive, follow-your-fingers animation.
+
+ Fires once and then stays quiet until every finger is up, or a single sweep would repeat for as
+ long as the fingers kept moving.
+ */
+- (void)recogniseSwipeWithTouches:(NSArray<TUCTouch *> *)touches {
+    if (self.didRecogniseSwipe) {
+        return;
+    }
+
+    TUCScreen *screen = [self touchscreenForLocationID:self.cursorTouch.locationID];
+    if (screen == nil) {
+        return;
+    }
+
+    CGPoint midpoint = CGPointZero;
+    for (TUCTouch *touch in touches) {
+        midpoint.x += touch.location.x / touches.count;
+        midpoint.y += touch.location.y / touches.count;
+    }
+
+    if (!self.hasSwipeBaseline) {
+        self.hasSwipeBaseline = YES;
+        self.swipeBaselineMidpoint = midpoint;
+
+        // Three fingers supersede whatever one or two were doing. Deliberately not
+        // `stopCurrentGesture`, which would clear the baseline just set here and loop.
+        TUCCursorUtilities *utils = [TUCCursorUtilities sharedInstance];
+        [utils cancelScrollGesture];
+        [utils stopDraggingCursor];
+        [utils stopMagnifying];
+        self.identifiedMultitouchGesture = _TUCCursorGestureNone;
+
+        return;
+    }
+
+    CGSize physicalSize = [screen effectivePhysicalSize];
+    CGFloat travelX = (midpoint.x - self.swipeBaselineMidpoint.x) * physicalSize.width;
+    CGFloat travelY = (midpoint.y - self.swipeBaselineMidpoint.y) * physicalSize.height;
+
+    if (MAX(fabs(travelX), fabs(travelY)) < kSwipeCommitDistance) {
+        return;
+    }
+
+    TUCCursorGesture swipe;
+    if (fabs(travelX) > fabs(travelY)) {
+        swipe = (travelX < 0) ? TUCCursorGestureSwipeLeft : TUCCursorGestureSwipeRight;
+    } else {
+        swipe = (travelY < 0) ? TUCCursorGestureSwipeUp : TUCCursorGestureSwipeDown;
+    }
+
+    self.didRecogniseSwipe = YES;
+    [self performMouseEventForGesture:swipe];
 }
 
 
@@ -749,6 +839,24 @@ static const CGFloat kTwoFingerCommitDistance = 2.0;
             
             break; }
             
+        // Direction follows the fingers, as everywhere else here: sweeping left carries the
+        // current space off to the left, which brings the next one in from the right.
+        case TUCCursorActionSpaceNext:
+            [utils pressKey:kVK_RightArrow modifiers:kCGEventFlagMaskControl];
+            break;
+
+        case TUCCursorActionSpacePrevious:
+            [utils pressKey:kVK_LeftArrow modifiers:kCGEventFlagMaskControl];
+            break;
+
+        case TUCCursorActionMissionControl:
+            [utils pressKey:kVK_UpArrow modifiers:kCGEventFlagMaskControl];
+            break;
+
+        case TUCCursorActionApplicationWindows:
+            [utils pressKey:kVK_DownArrow modifiers:kCGEventFlagMaskControl];
+            break;
+
         case TUCCursorActionMagnify:
             [utils magnifyLocationA:screenLocation
                           locationB:location2ndFinger
@@ -781,6 +889,12 @@ static const CGFloat kTwoFingerCommitDistance = 2.0;
         case TUCCursorGestureTwoFingerDrag:     return TUCCursorActionDrag;
             
         case TUCCursorGesturePinch:             return TUCCursorActionMagnify;
+
+        case TUCCursorGestureSwipeLeft:         return TUCCursorActionSpaceNext;
+        case TUCCursorGestureSwipeRight:        return TUCCursorActionSpacePrevious;
+        case TUCCursorGestureSwipeUp:           return TUCCursorActionMissionControl;
+        case TUCCursorGestureSwipeDown:         return TUCCursorActionApplicationWindows;
+
         case _TUCCursorGestureNone:             return TUCCursorActionNone;
     }
 }

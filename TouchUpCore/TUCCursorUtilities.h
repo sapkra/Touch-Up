@@ -83,6 +83,16 @@ static const int64_t kTUCSyntheticEventUserData = 0x54554348; // 'TUCH'
 /// catch-all wherever a touch finishes by a route that did not end the scroll itself.
 - (void)cancelScrollGesture;
 
+/**
+ Taps a key with modifiers held.
+
+ Used for the whole-system gestures — switching spaces, Mission Control, App Exposé — because
+ macOS recognises those from a trackpad's raw multitouch stream inside the window server, not from
+ anything an application can post. The shortcuts it already assigns to them are a public, stable
+ way to ask for the same thing.
+ */
+- (void)pressKey:(CGKeyCode)keyCode modifiers:(CGEventFlags)modifiers;
+
 - (void)magnifyLocationA:(CGPoint)p1 locationB:(CGPoint)p2 relativeP1:(CGPoint)r1 relP2:(CGPoint)r2;
 - (void)stopMagnifying;
 

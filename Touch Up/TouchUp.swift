@@ -37,6 +37,7 @@ class TouchUp: NSObject, ObservableObject {
     @Published var isExclusiveAccessEnabled = false
     @Published var isCursorHiddenEnabled = false
     @Published var twoFingerDragAction: TwoFingerDragAction = .drag
+    @Published var isSystemSwipeEnabled = true
 
     @Published var areAdditionalDigitizerRotationSettingsVisible = false
 
@@ -119,6 +120,7 @@ class TouchUp: NSObject, ObservableObject {
             && isMagnificationEnabled
             && isCursorHiddenEnabled
             && twoFingerDragAction == .drag
+            && isSystemSwipeEnabled
             && !isClickOnLiftEnabled
             && !isDraggingWithOneFingerEnabled
             && holdDuration >= Self.tabletModeHoldDuration
@@ -141,6 +143,7 @@ class TouchUp: NSObject, ObservableObject {
         isMagnificationEnabled = true
         isCursorHiddenEnabled = true
         twoFingerDragAction = .drag
+        isSystemSwipeEnabled = true
 
         holdDuration = Self.tabletModeHoldDuration
     }
@@ -211,6 +214,7 @@ extension TouchUp {
             "isExclusiveAccessEnabled" : false,
             "isCursorHiddenEnabled" : false,
             "twoFingerDragAction" : TwoFingerDragAction.drag.rawValue,
+            "isSystemSwipeEnabled" : true,
             "areAdditionalDigitizerRotationSettingsVisible" : false
         ])
         
@@ -254,6 +258,7 @@ extension TouchUp {
         isExclusiveAccessEnabled = defaults.bool(forKey: "isExclusiveAccessEnabled")
         isCursorHiddenEnabled = defaults.bool(forKey: "isCursorHiddenEnabled")
         twoFingerDragAction = TwoFingerDragAction(rawValue: defaults.integer(forKey: "twoFingerDragAction")) ?? .drag
+        isSystemSwipeEnabled = defaults.bool(forKey: "isSystemSwipeEnabled")
         areAdditionalDigitizerRotationSettingsVisible = defaults.bool(forKey: "areAdditionalDigitizerRotationSettingsVisible")
     }
     
@@ -277,6 +282,7 @@ extension TouchUp {
         defaults.set(isExclusiveAccessEnabled, forKey: "isExclusiveAccessEnabled")
         defaults.set(isCursorHiddenEnabled, forKey: "isCursorHiddenEnabled")
         defaults.set(twoFingerDragAction.rawValue, forKey: "twoFingerDragAction")
+        defaults.set(isSystemSwipeEnabled, forKey: "isSystemSwipeEnabled")
         defaults.set(areAdditionalDigitizerRotationSettingsVisible, forKey: "areAdditionalDigitizerRotationSettingsVisible")
     }
 
@@ -488,6 +494,20 @@ extension TouchUp: TUCTouchDelegate {
             
         case .TUCCursorGesturePinch:
             return isMagnificationEnabled ? .magnify : .none
+
+        // Sweeping three fingers, matching the trackpad pane's own directions: the space follows
+        // your fingers off the screen, up reveals Mission Control, down reveals the app's windows.
+        case .TUCCursorGestureSwipeLeft:
+            return isSystemSwipeEnabled ? .spaceNext : .none
+
+        case .TUCCursorGestureSwipeRight:
+            return isSystemSwipeEnabled ? .spacePrevious : .none
+
+        case .TUCCursorGestureSwipeUp:
+            return isSystemSwipeEnabled ? .missionControl : .none
+
+        case .TUCCursorGestureSwipeDown:
+            return isSystemSwipeEnabled ? .applicationWindows : .none
             
         default:
             return .none
@@ -557,6 +577,10 @@ extension TouchUp {
         case \.isClickOnLiftEnabled:
             return("Point and click",
                    "Very reduced input set for exhibits: Move cursor by dragging, and click by releasing. Overrides scrolling and dragging functionality.")
+
+        case \.isSystemSwipeEnabled:
+            return("Swipe Between Desktops",
+                   "Sweep three fingers across the screen to move between desktops, up for Mission Control, or down to see the current app's windows — as on a trackpad. Sent as the keyboard shortcuts macOS assigns to those commands, so the desktop switches in one step rather than following your fingers.")
 
         case \.twoFingerDragAction:
             return("On Two Finger Drag",
