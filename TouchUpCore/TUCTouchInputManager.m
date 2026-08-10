@@ -1030,19 +1030,18 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
             [utils moveCursorTo:screenLocation];
             break;
             
-        case TUCCursorActionMoveClickIfNeeded:
+        case TUCCursorActionMoveClickIfNeeded: {
             [utils moveCursorTo:screenLocation];
-            if ([self isLocationOutsideFrontmostWindow:screenLocation locationID:touch.locationID]) {
-                // Not `performClickAt:`. This click is ours, not the user's: it exists only to
-                // raise the window, and it must stay outside the click sequence.
-                [utils bringWindowToFrontAt:screenLocation];
 
-                // It is still a complete press and release delivered where the finger landed, so
-                // the tap has already actuated whatever is under it. Letting the lift add its own
-                // click on top means one tap presses a button twice, or toggles a checkbox back to
-                // where it started — which is worse than the un-raised window it set out to fix.
-                self.cursorTouchDidActuatePress = YES;
+            // Activate rather than click. The tap's own click follows on lift-off and lands on a
+            // window that is active by then, so it actuates whatever it hits — one click, doing
+            // both jobs, with nothing injected to double it up.
+            pid_t owner = [self applicationToRaiseForPoint:screenLocation locationID:touch.locationID];
+            if (owner != 0) {
+                [[NSRunningApplication runningApplicationWithProcessIdentifier:owner]
+                    activateWithOptions:0];
             }
+        }
 
             break;
             
@@ -1356,10 +1355,29 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
 }
 
 
-- (BOOL)isLocationOutsideFrontmostWindow:(CGPoint)point locationID:(uint32_t)locationID {
+/**
+ The process owning the window under `point`, when that window sits behind the active app's and a
+ tap there ought to bring it forward. Zero when nothing needs raising.
+
+ Raising is done by activating that application, not by injecting a click. A click is what this used
+ to do, and it cannot work: macOS consumes the first click on an inactive window to activate it and
+ does not pass it to the control underneath, unless that control opts in with `acceptsFirstMouse:`,
+ which most do not. So the injected click raised the window and the tap's own click actuated the
+ control — one tap doing both, which was the whole point — but on any control that *does* accept a
+ first mouse, both clicks landed and a single tap pressed a button twice.
+
+ Activating instead leaves exactly one click, the user's, arriving at a window that is already
+ active by the time it does. No guessing about which controls opt in.
+
+ It also retires a workaround: the injected click had to be skipped over title bars, because a title
+ bar accepts a first click, so raise-plus-tap arrived there as a double click and zoomed the window.
+ With nothing injected there is no second click to collide with, so a tap on a background title bar
+ raises it like anywhere else.
+ */
+- (pid_t)applicationToRaiseForPoint:(CGPoint)point locationID:(uint32_t)locationID {
 
     if ([self isPointInMenuBar:point locationID:locationID]) {
-        return NO;
+        return 0;
     }
 
     pid_t frontmostPID = [[[NSWorkspace sharedWorkspace] frontmostApplication] processIdentifier];
@@ -1372,14 +1390,14 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     // app's topmost window: windows seen before it are stacked above it, windows after are
     // behind it.
     BOOL behindFrontmostWindow = NO;
-    BOOL res = NO;
+    pid_t result = 0;
 
-    for (CFIndex i=0; i<CFArrayGetCount(array); i++) {
+    for (CFIndex i = 0; i < CFArrayGetCount(array); i++) {
         CFDictionaryRef dic = CFArrayGetValueAtIndex(array, i);
 
         CFNumberRef numPid = CFDictionaryGetValue(dic, kCGWindowOwnerPID);
         pid_t currPID;
-        CFNumberGetValue(numPid, kCFNumberIntType,  &currPID);
+        CFNumberGetValue(numPid, kCFNumberIntType, &currPID);
         BOOL isFrontmostApp = currPID == frontmostPID;
 
         CFDictionaryRef bounds = CFDictionaryGetValue(dic, kCGWindowBounds);
@@ -1399,37 +1417,14 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
         }
 
         // First real window under the point = the one the finger actually hits.
-        if (isFrontmostApp) {
-            res = NO;   // already the active window — the tap actuates it directly
-        } else if (!behindFrontmostWindow) {
-            res = NO;   // stacked above the active app (an overlay or our own panel) — takes the tap directly
-        } else {
-            // A background window of another app — normally inject a click to raise it.
-            // Exception: the title bar. A background title bar accepts clicks directly, so
-            // our injected raise-click plus the tap's own click would register as a
-            // title-bar double-click (→ zoom/fullscreen). A single tap already raises the
-            // window, so skip the extra click within the title-bar strip.
-            //
-            // The raise-click no longer seeds a double click — it goes through
-            // `-bringWindowToFrontAt:`, which stays out of the click sequence — so this strip
-            // should now be redundant and could be dropped to make taps on a background
-            // title bar raise the window again. It is kept until that is confirmed on real
-            // hardware, because the failure it guards against (a window unexpectedly zooming
-            // to fullscreen) is destructive and not worth risking on reasoning alone.
-            //
-            // CGWindowList can't tell us the actual title-bar/toolbar height, so this is a
-            // heuristic constant. Erring high (toolbars on Tahoe are tall) costs at most a
-            // missed raise-click near the top of a background window; erring low brings the
-            // destructive double-click-zoom back.
-            CGFloat titleBarHeight = 44;
-            BOOL inTitleBar = (point.y - nextFrame.origin.y) <= titleBarHeight;
-            res = inTitleBar ? NO : YES;
+        if (!isFrontmostApp && behindFrontmostWindow) {
+            result = currPID;
         }
         break;
     }
 
     CFRelease(array);
-    return res;
+    return result;
 }
 
 

@@ -64,8 +64,6 @@ static const int64_t kTUCSyntheticEventUserData = 0x54554348; // 'TUCH'
 
 - (CGPoint)currentCursorLocation;
 
-- (void)bringWindowToFrontAt:(CGPoint)aLocation;
-
 - (void)moveCursorTo:(CGPoint)aLocation;
 
 /**
