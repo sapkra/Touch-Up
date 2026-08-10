@@ -37,6 +37,11 @@
 @property CGFloat swipeFurthestTravel; // mm, for the diagnostics when a sweep never commits
 @property CGFloat swipeBaselineSpread; // how far the fingers sat from their midpoint, in mm
 
+/// How many fingers were down when the count last changed, and when. A gesture is only classified
+/// once the count has held steady, so fingers still arriving cannot be read as a smaller gesture.
+@property NSUInteger settledTouchCount;
+@property NSTimeInterval timeOfTouchCountChange;
+
 /// Inter-finger spread and midpoint when the second finger arrived, in mm and relative
 /// coordinates. A two-finger gesture is pinch or pan depending on which of the two has moved
 /// further since, which is far steadier than comparing per-report directions.
@@ -106,6 +111,17 @@ static const CGFloat kSwipeCommitDistance = 25.0;
  finger has left and so arrive with no touch on the glass to disown them.
  */
 static const NSTimeInterval kForeignPointerGracePeriod = 0.2;
+
+/**
+ How long the number of fingers has to hold steady before a multi-finger gesture is classified.
+
+ Three fingers never land at the same instant. Without a pause, the two that arrive first are
+ classified on their own — and two fingers need only 2 mm of travel to commit — so by the time the
+ third lands a two-finger drag has already taken the button down, and the sweep has to start again
+ from wherever the fingers had got to. Waiting for the count to settle costs a moment before a pinch
+ or a two-finger drag begins and makes the difference between three fingers working and not.
+ */
+static const NSTimeInterval kFingerCountSettleTime = 0.08;
 
 
 static NSString *TUCNameForGesture(TUCCursorGesture gesture) {
@@ -611,12 +627,21 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
         self.cursorTouchSawMultipleFingers = YES;
     }
 
+    NSTimeInterval nowTime = [NSDate timeIntervalSinceReferenceDate];
+    if (touches.count != self.settledTouchCount) {
+        self.settledTouchCount = touches.count;
+        self.timeOfTouchCountChange = nowTime;
+    }
+    BOOL fingerCountHasSettled = (nowTime - self.timeOfTouchCountChange) >= kFingerCountSettleTime;
+
     // Three or more fingers are a gesture of the whole hand, so they are read here — ahead of
     // everything that branches on the cursor touch's phase. Below the stationary branch, as this
     // used to be, a swipe was only ever evaluated on reports where the *first* finger down happened
     // to be registering movement; if that one was the anchor of the sweep, the gesture was invisible.
     if (touches.count >= 3) {
-        [self recogniseSwipeWithTouches:touches];
+        if (fingerCountHasSettled) {
+            [self recogniseSwipeWithTouches:touches];
+        }
         return;
     }
 
@@ -700,6 +725,16 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
         // taken over, or a touch lost mid-drag — which otherwise left the gesture open for good.
         [[TUCCursorUtilities sharedInstance] cancelScrollGesture];
 
+        // This touch is finished with. `removeTouch:now:NO` keeps the object alive for half a
+        // second so gesture evaluation can still see it, and the weak reference here stayed valid
+        // for just as long — so every report arriving in that window re-entered this branch.
+        //
+        // It re-emitted the tap, and worse, it kept `updateHoldState` running against a
+        // `cursorTouchStationarySinceDate` from the moment the finger first landed. Once that
+        // reached the hold duration the long press fired, so a short tap produced its click and
+        // then a context menu a fraction of a second later, with no finger anywhere near the glass.
+        self.cursorTouch = nil;
+
         // Only while the pointer is hidden. Moving a pointer the user can see, just after they
         // touched somewhere, would be its own kind of wrong.
         if (self.hidesCursor) {
@@ -726,7 +761,9 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
         }
         self.gestureAdditionalTouch = otherTouch;
 
-        if (self.identifiedMultitouchGesture == _TUCCursorGestureNone) {
+        // Not until the count has settled: a third finger on its way would otherwise find this
+        // already committed to a pinch or a drag, with the button down.
+        if (self.identifiedMultitouchGesture == _TUCCursorGestureNone && fingerCountHasSettled) {
             [self classifyTwoFingerGestureWithSecondTouch:otherTouch];
         }
 
