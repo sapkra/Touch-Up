@@ -88,9 +88,11 @@ NS_ASSUME_NONNULL_BEGIN
  Hides the mouse pointer, so touching the glass feels direct rather than like steering a mouse
  from a distance. There is no pointer on a tablet.
 
- The pointer still comes back on its own whenever something other than a touch moves it — a real
- mouse or trackpad — and hides again on the next touch. Without that, plugging in a mouse would
- leave a user hunting for an invisible pointer to reach the setting that turns this off.
+ Stays hidden for as long as this is set, including for a mouse or trackpad — turning it off, or
+ quitting, is what brings the pointer back. An earlier version re-showed it whenever something
+ other than a touch moved the pointer, which needed our own injected moves to be reliably
+ distinguishable from real ones; they were not, so it flickered the pointer on and off through
+ every touch instead.
 
  Always restore this before the app exits; the underlying calls are process-scoped and there is
  nothing to clean up after a crash.

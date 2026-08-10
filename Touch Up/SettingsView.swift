@@ -137,9 +137,11 @@ struct SettingsView: View {
                 SettingsExplanationLabel(labels: model.uiLabels(for: \.doubleClickDistance))
             }
 
-            // Reaches 16 mm because pointing precision scales with the panel: a tap on a 32"
-            // display is nothing like a tap on a 7" one.
-            Slider(value: $model.tapDistance, in: 0.5...16, step: 0.5) {
+            // Starts at 2 mm, because below that no real tap survives: a finger settling on the
+            // glass shifts the reported contact further than that on its own, so the touch becomes
+            // a scroll and never clicks. Reaches 16 because precision scales with the panel — a tap
+            // on a 32" display is nothing like a tap on a 7" one.
+            Slider(value: $model.tapDistance, in: 2...16, step: 0.5) {
                 SettingsExplanationLabel(labels: model.uiLabels(for: \.tapDistance))
             }
         }

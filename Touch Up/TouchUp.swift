@@ -116,36 +116,66 @@ class TouchUp: NSObject, ObservableObject {
     var isTabletModeActive: Bool {
         isScrollingWithOneFingerEnabled
             && isLongPressContextMenuEnabled
-            && isSecondaryClickEnabled
             && isMagnificationEnabled
             && isCursorHiddenEnabled
-            && twoFingerDragAction == .drag
             && isSystemSwipeEnabled
+            && twoFingerDragAction == .drag
+            && !isSecondaryClickEnabled
             && !isClickOnLiftEnabled
             && !isDraggingWithOneFingerEnabled
+            && !isClickWindowToFrontEnabled
             && holdDuration >= Self.tabletModeHoldDuration
+            && tapDistance >= Self.tabletModeTapDistance
     }
 
-    /// iPadOS waits about half a second before a press becomes a long press. The previous default
-    /// of 0.1 s is short enough that an ordinary unhurried tap crosses it, which is why holding
-    /// used to trigger by accident.
-    static let tabletModeHoldDuration: TimeInterval = 0.5
+    /// Long enough that an ordinary tap cannot reach it. iPadOS uses about half a second, but a
+    /// tap there is a thumb on a handheld screen; reaching out to a wall-sized panel and lifting
+    /// again takes longer, and a tap that overruns becomes a context menu — which on most controls
+    /// shows nothing at all, so it reads as the click having been ignored.
+    static let tabletModeHoldDuration: TimeInterval = 0.7
 
-    /// One finger scrolls, a tap clicks, holding opens the right-click menu, two fingers drag and
-    /// pinch zooms — and no pointer. The individual settings stay editable underneath.
+    /// How far a finger may slide and still be a tap. Anything past it is a scroll, and a scroll
+    /// produces no click, so a value tuned for a phone quietly stops a large panel clicking at all.
+    static let tabletModeTapDistance: CGFloat = 5
+
+    /// Two taps this far apart still count as a double click. Generous, because pointing precision
+    /// scales with the panel.
+    static let tabletModeDoubleClickDistance: CGFloat = 8
+
+    /// Every setting that decides how the glass behaves, put where a tablet would have it.
+    ///
+    /// The timings and distances are part of the mode, not incidental tuning: whether a touch is a
+    /// tap at all is decided by `tapDistance` and `holdDuration`, and a value tuned for a phone
+    /// makes an ordinary tap on a wall-sized panel land as a scroll or a long press instead.
     func activateTabletMode() {
+        // One finger moves the content, as on a tablet. Never the pointer, never a button.
         isScrollingWithOneFingerEnabled = true
         isClickOnLiftEnabled = false
         isDraggingWithOneFingerEnabled = false
 
-        isLongPressContextMenuEnabled = true
-        isSecondaryClickEnabled = true
-        isMagnificationEnabled = true
-        isCursorHiddenEnabled = true
+        // Two fingers hold the button down. Not a tablet gesture, but dragging has to live
+        // somewhere: it is the only way to pan a map, move a window, work a slider or select text,
+        // and one finger is already spoken for.
         twoFingerDragAction = .drag
+
+        // Holding still opens the context menu, which is what a long press does on a tablet.
+        isLongPressContextMenuEnabled = true
+
+        // Two-finger tap for a secondary click is a trackpad idiom with no tablet equivalent, and
+        // the long press already covers the menu.
+        isSecondaryClickEnabled = false
+
+        isMagnificationEnabled = true
         isSystemSwipeEnabled = true
+        isCursorHiddenEnabled = true
+
+        // Off: it fires its own click on touch-down to raise a window, so a tap on anything not
+        // already frontmost actuates twice. Tapping simply works on a tablet.
+        isClickWindowToFrontEnabled = false
 
         holdDuration = Self.tabletModeHoldDuration
+        tapDistance = Self.tabletModeTapDistance
+        doubleClickDistance = Self.tabletModeDoubleClickDistance
     }
 
     func copyDiagnosticsToClipboard() {
@@ -227,8 +257,12 @@ extension TouchUp {
         // panel, made with the whole arm rather than a thumb, drifts further than that — and any
         // drift past this radius becomes a scroll instead of a click, which is why taps sometimes
         // only moved the pointer. Treat exactly the old default as "never chosen" and lift it.
+        // Anything under 2 mm is smaller than the shift a finger makes just settling onto the
+        // glass, so every touch becomes a scroll and nothing ever clicks. It used to be selectable,
+        // so lift a stored value up rather than leaving someone stuck with a screen that ignores
+        // them. 2.5 was the old default and was never a deliberate choice either.
         let storedTapDistance = defaults.double(forKey: "tapDistance")
-        tapDistance = (storedTapDistance == 2.5) ? 5 : storedTapDistance
+        tapDistance = (storedTapDistance < 2 || storedTapDistance == 2.5) ? 5 : storedTapDistance
         errorResistance = defaults.integer(forKey: "errorResistance")
         ignoreOriginTouches = defaults.bool(forKey: "ignoreOriginTouches")
 
@@ -588,7 +622,7 @@ extension TouchUp {
 
         case \.isCursorHiddenEnabled:
             return("Hide the Mouse Pointer",
-                   "There is no pointer on a tablet, and one that jumps to wherever you touched is the clearest reminder that you are steering a mouse. It reappears if you move a real mouse, and hides again on your next touch.")
+                   "There is no pointer on a tablet, and one that jumps to wherever you touched is the clearest reminder that you are steering a mouse. It stays hidden while this is on, including for a mouse — switch it off, or quit Touch Up, to get the pointer back.")
 
         case \.isExclusiveAccessEnabled:
             return("Exclusive Access",

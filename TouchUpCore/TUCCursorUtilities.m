@@ -167,9 +167,9 @@ static Boolean TUCSetCursorHiddenInBackground(Boolean hidden) {
 /**
  Every event Touch Up injects goes out through here, stamped as ours.
 
- The stamp is what lets `TUCTouchInputManager` distinguish pointer movement it caused from a real
- mouse being moved, which is how the pointer comes back while cursor hiding is on. Posting
- directly would silently opt an event out of that.
+ The stamp marks the event as ours, which is what an event tap needs in order not to react to
+ input this app produced itself. Routing every post through one place is also the only way to be
+ sure a new call site cannot quietly skip it.
  */
 - (void)postSyntheticEvent:(CGEventRef)event {
     if (event == NULL) return;

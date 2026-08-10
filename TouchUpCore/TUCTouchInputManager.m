@@ -49,10 +49,6 @@
 /// recurs on every report is recorded once instead of flooding it.
 @property NSMutableSet<NSString *> *notedDeviceObservations;
 
-/// Watches for pointer movement that did not come from us, so a real mouse can bring the pointer
-/// back while `hidesCursor` is on.
-@property (strong) id foreignPointerMonitor;
-
 @end
 
 
@@ -126,52 +122,6 @@ static const CGFloat kSwipeCommitDistance = 25.0;
     _hidesCursor = hidesCursor;
 
     [[TUCCursorUtilities sharedInstance] setIsCursorHidden:hidesCursor];
-
-    if (hidesCursor) {
-        [self startWatchingForForeignPointerMovement];
-    } else {
-        [self stopWatchingForForeignPointerMovement];
-    }
-}
-
-
-/**
- Brings the pointer back as soon as something that is not us moves it.
-
- Our own events are stamped with `kCGEventSourceUserData`, so anything arriving without that stamp
- came from a real mouse or trackpad. Whoever is using one needs to see where it is — and would
- otherwise have to find an invisible pointer to reach the setting that turns hiding off. Touching
- the glass hides it again, so nothing about the tablet feel is lost.
- */
-- (void)startWatchingForForeignPointerMovement {
-    if (self.foreignPointerMonitor != nil) {
-        return;
-    }
-
-    NSEventMask mask = NSEventMaskMouseMoved | NSEventMaskLeftMouseDragged
-                     | NSEventMaskRightMouseDragged | NSEventMaskOtherMouseDragged;
-
-    __weak typeof(self) weakSelf = self;
-    self.foreignPointerMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:mask handler:^(NSEvent *event) {
-        typeof(self) strongSelf = weakSelf;
-        if (strongSelf == nil || !strongSelf.hidesCursor) return;
-
-        CGEventRef cgEvent = event.CGEvent;
-        if (cgEvent == NULL) return;
-
-        int64_t source = CGEventGetIntegerValueField(cgEvent, kCGEventSourceUserData);
-        if (source != kTUCSyntheticEventUserData) {
-            [[TUCCursorUtilities sharedInstance] setIsCursorHidden:NO];
-        }
-    }];
-}
-
-
-- (void)stopWatchingForForeignPointerMovement {
-    if (self.foreignPointerMonitor != nil) {
-        [NSEvent removeMonitor:self.foreignPointerMonitor];
-        self.foreignPointerMonitor = nil;
-    }
 }
 
 
