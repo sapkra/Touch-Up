@@ -56,6 +56,18 @@ struct DigitizerConfig: Codable, Hashable {
     }
 }
 
+/// What dragging two fingers does. Kept separate from the one-finger setting rather than derived
+/// from it: the two are a genuine pair of choices, and deriving one silently meant the more useful
+/// half of the gesture set was never visible in the settings at all.
+enum TwoFingerDragAction: Int, CaseIterable {
+    /// Holds the mouse button and moves it — pans a map, moves a window, works a slider, selects
+    /// text. None of that is reachable any other way while one finger is scrolling.
+    case drag = 0
+    case scroll = 1
+    case nothing = 2
+}
+
+
 enum DigitizerAxis {
     case horizontal
     case vertical

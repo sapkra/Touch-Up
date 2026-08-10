@@ -36,6 +36,7 @@ class TouchUp: NSObject, ObservableObject {
     @Published var isLongPressContextMenuEnabled = false
     @Published var isExclusiveAccessEnabled = false
     @Published var isCursorHiddenEnabled = false
+    @Published var twoFingerDragAction: TwoFingerDragAction = .drag
 
     @Published var areAdditionalDigitizerRotationSettingsVisible = false
 
@@ -117,6 +118,7 @@ class TouchUp: NSObject, ObservableObject {
             && isSecondaryClickEnabled
             && isMagnificationEnabled
             && isCursorHiddenEnabled
+            && twoFingerDragAction == .drag
             && !isClickOnLiftEnabled
             && !isDraggingWithOneFingerEnabled
             && holdDuration >= Self.tabletModeHoldDuration
@@ -138,6 +140,7 @@ class TouchUp: NSObject, ObservableObject {
         isSecondaryClickEnabled = true
         isMagnificationEnabled = true
         isCursorHiddenEnabled = true
+        twoFingerDragAction = .drag
 
         holdDuration = Self.tabletModeHoldDuration
     }
@@ -207,6 +210,7 @@ extension TouchUp {
             "isLongPressContextMenuEnabled" : false,
             "isExclusiveAccessEnabled" : false,
             "isCursorHiddenEnabled" : false,
+            "twoFingerDragAction" : TwoFingerDragAction.drag.rawValue,
             "areAdditionalDigitizerRotationSettingsVisible" : false
         ])
         
@@ -249,6 +253,7 @@ extension TouchUp {
         isLongPressContextMenuEnabled = defaults.bool(forKey: "isLongPressContextMenuEnabled")
         isExclusiveAccessEnabled = defaults.bool(forKey: "isExclusiveAccessEnabled")
         isCursorHiddenEnabled = defaults.bool(forKey: "isCursorHiddenEnabled")
+        twoFingerDragAction = TwoFingerDragAction(rawValue: defaults.integer(forKey: "twoFingerDragAction")) ?? .drag
         areAdditionalDigitizerRotationSettingsVisible = defaults.bool(forKey: "areAdditionalDigitizerRotationSettingsVisible")
     }
     
@@ -271,6 +276,7 @@ extension TouchUp {
         defaults.set(isLongPressContextMenuEnabled, forKey: "isLongPressContextMenuEnabled")
         defaults.set(isExclusiveAccessEnabled, forKey: "isExclusiveAccessEnabled")
         defaults.set(isCursorHiddenEnabled, forKey: "isCursorHiddenEnabled")
+        defaults.set(twoFingerDragAction.rawValue, forKey: "twoFingerDragAction")
         defaults.set(areAdditionalDigitizerRotationSettingsVisible, forKey: "areAdditionalDigitizerRotationSettingsVisible")
     }
 
@@ -474,11 +480,11 @@ extension TouchUp: TUCTouchDelegate {
             return isSecondaryClickEnabled ? .secondaryClick : .none
             
         case .TUCCursorGestureTwoFingerDrag:
-            // Whichever job one finger is not doing. With one finger scrolling, two fingers hold
-            // the button down and drag — the only way to pan a map, move a window, work a slider
-            // or select text, since no rule can tell those apart from a scroll area.
-            if isDraggingWithOneFingerEnabled { return .scroll }
-            return isScrollingWithOneFingerEnabled ? .drag : .none
+            switch twoFingerDragAction {
+            case .drag:    return .drag
+            case .scroll:  return .scroll
+            case .nothing: return .none
+            }
             
         case .TUCCursorGesturePinch:
             return isMagnificationEnabled ? .magnify : .none
@@ -551,6 +557,10 @@ extension TouchUp {
         case \.isClickOnLiftEnabled:
             return("Point and click",
                    "Very reduced input set for exhibits: Move cursor by dragging, and click by releasing. Overrides scrolling and dragging functionality.")
+
+        case \.twoFingerDragAction:
+            return("On Two Finger Drag",
+                   "Dragging with two fingers holds the mouse button down and moves it, which is what pans a map, moves a window, works a slider or selects text. Nothing can tell those apart from a scrolling area, so they need a gesture of their own.")
 
         case \.isCursorHiddenEnabled:
             return("Hide the Mouse Pointer",

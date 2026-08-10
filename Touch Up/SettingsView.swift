@@ -81,10 +81,19 @@ struct SettingsView: View {
                 Text("Point and Click").tag(2)
                 Text("Drag").tag(3)
             } label: {
-                SettingsExplanationLabel(labels: ("On Finger Drag", "Specify which action should occur when dragging one finger on the touch screen. \"Drag\" holds the mouse button down and moves it, and hands scrolling over to two fingers."))
+                SettingsExplanationLabel(labels: ("On Finger Drag", "Specify which action should occur when dragging one finger on the touch screen. If you set this to \"Drag\", set Two Finger Drag to \"Scroll\" so that scrolling is still reachable."))
             }
 
             
+            Picker(selection: $model.twoFingerDragAction) {
+                Text("Drag").tag(TwoFingerDragAction.drag)
+                Text("Scroll").tag(TwoFingerDragAction.scroll)
+                Text("Nothing").tag(TwoFingerDragAction.nothing)
+            } label: {
+                SettingsExplanationLabel(labels: model.uiLabels(for: \.twoFingerDragAction))
+            }
+
+
             Toggle(isOn: $model.isSecondaryClickEnabled) {
                 SettingsExplanationLabel(labels: model.uiLabels(for: \.isSecondaryClickEnabled))
             }
