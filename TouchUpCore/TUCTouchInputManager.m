@@ -508,8 +508,11 @@ static const CGFloat kTwoFingerCommitDistance = 2.0;
         // Only while the pointer is hidden. Moving a pointer the user can see, just after they
         // touched somewhere, would be its own kind of wrong.
         if (self.hidesCursor) {
+            CGPoint touchedPoint = [self convertScreenPointRelativeToAbsolute:cursorTouch.location
+                                                                  locationID:cursorTouch.locationID];
             [[TUCCursorUtilities sharedInstance]
-                nudgeCursorInsideFrame:[self absoluteBoundsForLocationID:cursorTouch.locationID]];
+                    parkCursorAt:touchedPoint
+                     insideFrame:[self absoluteBoundsForLocationID:cursorTouch.locationID]];
         }
 
         return;

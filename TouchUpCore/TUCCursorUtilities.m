@@ -26,6 +26,11 @@
 @property CGPoint momentumVelocity;
 @property (strong) NSTimer *momentumScrollTimer;
 
+/// Where the drag was last taken. `-currentCursorLocation` cannot be used to release a drag: the
+/// moves being released were themselves posted asynchronously, so it can still report a position
+/// from before them and drop the drag somewhere the user never went.
+@property CGPoint lastDragLocation;
+
 @property BOOL isMagnifying;
 @property CGFloat lastPinchDistance;
 
@@ -203,8 +208,14 @@ static Boolean TUCSetCursorHiddenInBackground(Boolean hidden) {
 
  Nudging it inside once the touch is over costs nothing — the click has already been delivered at
  the real position — and it is invisible while the pointer is hidden.
+
+ `location` is where the caller *put* the pointer, not where the pointer is now. Asking the window
+ server would be wrong: `CGEventPost` is asynchronous, so a read taken straight after posting a
+ move still returns the previous position. Clamping that gave the worst of both — a touch near an
+ edge looked central and was left alone, and the next central touch looked like the edge one and
+ got dragged back to it, so the Dock appeared wherever you touched.
  */
-- (void)nudgeCursorInsideFrame:(CGRect)frame {
+- (void)parkCursorAt:(CGPoint)location insideFrame:(CGRect)frame {
     // Enough to clear the edge-trigger bands, small enough to stay on whatever was touched.
     const CGFloat inset = 12.0;
 
@@ -212,7 +223,6 @@ static Boolean TUCSetCursorHiddenInBackground(Boolean hidden) {
         return;
     }
 
-    CGPoint location = [self currentCursorLocation];
     CGPoint parked = CGPointMake(MAX(CGRectGetMinX(frame) + inset, MIN(CGRectGetMaxX(frame) - inset, location.x)),
                                  MAX(CGRectGetMinY(frame) + inset, MIN(CGRectGetMaxY(frame) - inset, location.y)));
 
@@ -347,6 +357,8 @@ static Boolean TUCSetCursorHiddenInBackground(Boolean hidden) {
     }
     
     
+    self.lastDragLocation = aLocation;
+
     if (self.isLeftMouseDown) {
         CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDragged, aLocation, kCGMouseButtonLeft);
         CGEventSetIntegerValueField(event, kCGMouseEventClickState, self.cursorClickCount);
@@ -368,7 +380,7 @@ static Boolean TUCSetCursorHiddenInBackground(Boolean hidden) {
 
 - (void)stopDraggingCursor {
     if (self.isLeftMouseDown) {
-        CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp, [self currentCursorLocation], kCGMouseButtonLeft);
+        CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp, self.lastDragLocation, kCGMouseButtonLeft);
         CGEventSetIntegerValueField(event, kCGMouseEventClickState, self.cursorClickCount);
         [self postSyntheticEvent:event];
         CFRelease(event);
