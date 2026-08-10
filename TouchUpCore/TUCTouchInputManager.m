@@ -49,6 +49,10 @@
 /// recurs on every report is recorded once instead of flooding it.
 @property NSMutableSet<NSString *> *notedDeviceObservations;
 
+/// The last handful of touches and what each was decided to be. Small and always on: when someone
+/// reports that tapping does nothing, this is the difference between reading the code and knowing.
+@property NSMutableArray<NSString *> *recentGestureLog;
+
 @end
 
 
@@ -88,6 +92,45 @@ static const CGFloat kTwoFingerCommitDistance = 2.0;
  is far worse than having to sweep a little further.
  */
 static const CGFloat kSwipeCommitDistance = 25.0;
+
+
+static NSString *TUCNameForGesture(TUCCursorGesture gesture) {
+    switch (gesture) {
+        case TUCCursorGestureTouchDown:       return @"TouchDown";
+        case TUCCursorGestureTap:             return @"Tap";
+        case TUCCursorGestureLongPress:       return @"LongPress";
+        case TUCCursorGestureDrag:            return @"Drag";
+        case TUCCursorGestureHoldAndDrag:     return @"HoldAndDrag";
+        case TUCCursorGestureTapSecondFinger: return @"SecondFingerTap";
+        case TUCCursorGestureTwoFingerDrag:   return @"TwoFingerDrag";
+        case TUCCursorGesturePinch:           return @"Pinch";
+        case TUCCursorGestureSwipeLeft:       return @"SwipeLeft";
+        case TUCCursorGestureSwipeRight:      return @"SwipeRight";
+        case TUCCursorGestureSwipeUp:         return @"SwipeUp";
+        case TUCCursorGestureSwipeDown:       return @"SwipeDown";
+        case _TUCCursorGestureNone:           return @"None";
+    }
+    return @"?";
+}
+
+static NSString *TUCNameForAction(TUCCursorAction action) {
+    switch (action) {
+        case TUCCursorActionNone:               return @"nothing";
+        case TUCCursorActionMove:               return @"move";
+        case TUCCursorActionMoveClickIfNeeded:  return @"move+raise";
+        case TUCCursorActionPointAndClick:      return @"point&click";
+        case TUCCursorActionDrag:               return @"drag";
+        case TUCCursorActionClick:              return @"CLICK";
+        case TUCCursorActionSecondaryClick:     return @"right-click";
+        case TUCCursorActionScroll:             return @"scroll";
+        case TUCCursorActionMagnify:            return @"magnify";
+        case TUCCursorActionSpacePrevious:      return @"space-";
+        case TUCCursorActionSpaceNext:          return @"space+";
+        case TUCCursorActionMissionControl:     return @"mission-control";
+        case TUCCursorActionApplicationWindows: return @"app-windows";
+    }
+    return @"?";
+}
 
 
 @implementation TUCTouchInputManager
@@ -189,6 +232,17 @@ static const CGFloat kSwipeCommitDistance = 25.0;
  transcript — but they are exactly what turns "my taps do nothing" into an answer, so they
  belong in the report a user pastes into an issue.
  */
+/// Appends to the rolling record of what gestures were produced, oldest dropped.
+- (void)logGesture:(NSString *)entry {
+    [self.recentGestureLog addObject:entry];
+
+    static const NSUInteger kMaxEntries = 24;
+    if (self.recentGestureLog.count > kMaxEntries) {
+        [self.recentGestureLog removeObjectsInRange:NSMakeRange(0, self.recentGestureLog.count - kMaxEntries)];
+    }
+}
+
+
 - (void)noteOnceForLocationID:(uint32_t)locationID key:(NSString *)key message:(NSString *)message {
     NSString *identity = [NSString stringWithFormat:@"%u/%@", locationID, key];
     if ([self.notedDeviceObservations containsObject:identity]) {
@@ -465,6 +519,19 @@ static const CGFloat kSwipeCommitDistance = 25.0;
             }
         }
 
+        TUCScreen *summaryScreen = [self touchscreenForLocationID:cursorTouch.locationID];
+        [self logGesture:[NSString stringWithFormat:
+                          @"touch ended: %.0f ms, moved %.1f mm (zone %.1f), tap=%@ held=%@ menu=%@ pressed=%@%@",
+                          ([NSDate timeIntervalSinceReferenceDate] - self.cursorTouchBeganTime) * 1000.0,
+                          summaryScreen ? [summaryScreen millimetreDistanceBetweenRelativePoint:cursorTouch.location
+                                                                                            and:self.cursorTouchOrigin] : -1,
+                          self.tapTolerance,
+                          self.cursorTouchQualifiedForTap ? @"Y" : @"n",
+                          self.cursorTouchDidHold ? @"Y" : @"n",
+                          self.cursorTouchDidActuateLongPress ? @"Y" : @"n",
+                          didActuatePress ? @"Y" : @"n",
+                          wasMultitouchGesture ? @" multitouch" : @""]];
+
         [self stopCurrentGesture];
 
         // The normal lift already ended the scroll and handed off its flick, so this is a no-op
@@ -739,6 +806,12 @@ static const CGFloat kSwipeCommitDistance = 25.0;
     TUCCursorUtilities *utils = [TUCCursorUtilities sharedInstance];
     
     TUCCursorAction action = [self actionForGesture:gesture];
+
+    // `TouchDown` fires on every touch and would swamp the record; everything else is a decision.
+    if (gesture != TUCCursorGestureTouchDown) {
+        [self logGesture:[NSString stringWithFormat:@"  %@ -> %@",
+                          TUCNameForGesture(gesture), TUCNameForAction(action)]];
+    }
     
     CGFloat doubleClickSpan = self.doubleClickTolerance * [[self touchscreenForLocationID:touch.locationID] pixelsPerMM];
     [[TUCCursorUtilities sharedInstance] setDoubleClickTolerance:doubleClickSpan];
@@ -1153,6 +1226,7 @@ static const CGFloat kSwipeCommitDistance = 25.0;
 
         self.frameIDsByLocationID = [NSMutableDictionary new];
         self.notedDeviceObservations = [NSMutableSet new];
+        self.recentGestureLog = [NSMutableArray new];
         self.identifiedMultitouchGesture = _TUCCursorGestureNone;
 
         self.doubleClickTolerance = 5;
@@ -1218,6 +1292,9 @@ static const CGFloat kSwipeCommitDistance = 25.0;
         BOOL flippedV = (self.delegate != nil)
             && [self.delegate digitizerIsFlippedVerticallyForLocationID:locationID];
 
+        [report appendFormat:@"digitizer %#010x   drives pointer: %@\n", locationID,
+         TouchDeviceDrivesPointer(locationID) ? @"YES" : @"NO - it will never produce any input"];
+
         [report appendFormat:@"digitizer %#010x -> %@   (extra rotation %+.0f°, mirrored %@)\n",
          locationID,
          screen ? screen.name : @"UNRESOLVED - no screen could be assigned",
@@ -1236,6 +1313,14 @@ static const CGFloat kSwipeCommitDistance = 25.0;
      self.hidesCursor ? @"YES" : @"NO",
      self.hidesCursor && ![[TUCCursorUtilities sharedInstance] canHideCursorSystemWide]
         ? @" (only while Touch Up is frontmost - the system-wide hook was unavailable)" : @""];
+
+    [report appendString:@"\n───── Recent gestures ─────\n"];
+    if (self.recentGestureLog.count == 0) {
+        [report appendString:@"(nothing yet - touch the screen, then copy this again)\n"];
+    }
+    for (NSString *entry in self.recentGestureLog) {
+        [report appendFormat:@"%@\n", entry];
+    }
 
     [report appendString:@"\n───── HID discovery ─────\n"];
     const char *transcript = HIDDiagnostics();
