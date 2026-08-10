@@ -6,6 +6,7 @@
 //
 
 #import "TUCCursorUtilities.h"
+#import <dlfcn.h>
 
 @interface TUCCursorUtilities ()
 
@@ -63,6 +64,82 @@ static const CGFloat kMomentumMinimumSpeed = 30.0;
 
 
 
+#pragma mark - Cursor Visibility
+
+/**
+ `CGDisplayHideCursor` only takes effect while the calling app is frontmost, which is no use to a
+ menu bar app that is never frontmost. The private connection property below is what lets a
+ background process hide the pointer system-wide.
+
+ Resolved through `dlsym` and degraded gracefully when absent, the same way `TUCScreen` reaches
+ `CoreDisplay_DisplayCreateInfoDictionary` — if it ever disappears, hiding simply becomes
+ app-scoped rather than the app failing to launch.
+ */
+static Boolean TUCSetCursorHiddenInBackground(Boolean hidden) {
+    typedef int (*ConnectionIDFunc)(void);
+    typedef int (*SetPropertyFunc)(int cid, CFStringRef key, CFTypeRef value);
+
+    static ConnectionIDFunc defaultConnection;
+    static SetPropertyFunc setProperty;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        defaultConnection = (ConnectionIDFunc)dlsym(RTLD_DEFAULT, "_CGSDefaultConnection");
+        if (defaultConnection == NULL) {
+            defaultConnection = (ConnectionIDFunc)dlsym(RTLD_DEFAULT, "CGSMainConnectionID");
+        }
+        setProperty = (SetPropertyFunc)dlsym(RTLD_DEFAULT, "CGSSetConnectionProperty");
+    });
+
+    if (defaultConnection == NULL || setProperty == NULL) {
+        return false;
+    }
+
+    CFStringRef key = CFSTR("SetsCursorInBackground");
+    CFBooleanRef value = hidden ? kCFBooleanTrue : kCFBooleanFalse;
+    return setProperty(defaultConnection(), key, value) == 0;
+}
+
+
+- (BOOL)canHideCursorSystemWide {
+    // Probing costs nothing and is idempotent: setting the property to its current meaning has no
+    // effect beyond telling us whether the symbols resolved.
+    return TUCSetCursorHiddenInBackground(self.isCursorHidden) ? YES : NO;
+}
+
+
+@synthesize isCursorHidden = _isCursorHidden;
+
+- (void)setIsCursorHidden:(BOOL)isCursorHidden {
+    if (_isCursorHidden == isCursorHidden) {
+        return;
+    }
+    _isCursorHidden = isCursorHidden;
+
+    if (isCursorHidden) {
+        TUCSetCursorHiddenInBackground(true);
+        CGDisplayHideCursor(kCGDirectMainDisplay);
+    } else {
+        CGDisplayShowCursor(kCGDirectMainDisplay);
+        TUCSetCursorHiddenInBackground(false);
+    }
+}
+
+
+/**
+ Every event Touch Up injects goes out through here, stamped as ours.
+
+ The stamp is what lets `TUCTouchInputManager` distinguish pointer movement it caused from a real
+ mouse being moved, which is how the pointer comes back while cursor hiding is on. Posting
+ directly would silently opt an event out of that.
+ */
+- (void)postSyntheticEvent:(CGEventRef)event {
+    if (event == NULL) return;
+
+    CGEventSetIntegerValueField(event, kCGEventSourceUserData, kTUCSyntheticEventUserData);
+    CGEventPost(kCGHIDEventTap, event);
+}
+
+
 - (CGPoint)currentCursorLocation {
     CGEventRef dummy = CGEventCreate(NULL);
     CGPoint location = CGEventGetLocation(dummy);
@@ -78,7 +155,7 @@ static const CGFloat kMomentumMinimumSpeed = 30.0;
     
     CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, aLocation, kCGMouseButtonLeft);
     CGEventSetIntegerValueField(event, kCGMouseEventClickState, 0);
-    CGEventPost(kCGHIDEventTap, event);
+    [self postSyntheticEvent:event];
     CFRelease(event);
 }
 
@@ -100,12 +177,12 @@ static const CGFloat kMomentumMinimumSpeed = 30.0;
     CGEventTimestamp time = CGEventGetTimestamp(event);
     CGEventSetTimestamp(event, time-1);
     
-    CGEventPost(kCGHIDEventTap, event);
+    [self postSyntheticEvent:event];
     CGEventSetType(event, kCGEventLeftMouseDragged);
-    CGEventPost(kCGHIDEventTap, event);
+    [self postSyntheticEvent:event];
     CGEventSetLocation(event, aLocation);
     CGEventSetType(event, kCGEventLeftMouseUp);
-    CGEventPost(kCGHIDEventTap, event);
+    [self postSyntheticEvent:event];
     
     CFRelease(event);
     //    self.isLeftMouseDown = YES;
@@ -132,12 +209,12 @@ static const CGFloat kMomentumMinimumSpeed = 30.0;
     // press duration of exactly zero.
     CGEventRef mouseDown = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDown, aLocation, kCGMouseButtonLeft);
     CGEventSetIntegerValueField(mouseDown, kCGMouseEventClickState, self.cursorClickCount);
-    CGEventPost(kCGHIDEventTap, mouseDown);
+    [self postSyntheticEvent:mouseDown];
     CFRelease(mouseDown);
 
     CGEventRef mouseUp = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp, aLocation, kCGMouseButtonLeft);
     CGEventSetIntegerValueField(mouseUp, kCGMouseEventClickState, self.cursorClickCount);
-    CGEventPost(kCGHIDEventTap, mouseUp);
+    [self postSyntheticEvent:mouseUp];
     CFRelease(mouseUp);
 }
 
@@ -189,9 +266,9 @@ static const CGFloat kMomentumMinimumSpeed = 30.0;
 - (void)performSecondaryClickAt:(CGPoint)aLocation {
     CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventRightMouseDown, aLocation, kCGMouseButtonRight);
     CGEventSetIntegerValueField(event, kCGMouseEventClickState, 1);
-    CGEventPost(kCGHIDEventTap, event);
+    [self postSyntheticEvent:event];
     CGEventSetType(event, kCGEventRightMouseUp);
-    CGEventPost(kCGHIDEventTap, event);
+    [self postSyntheticEvent:event];
     CFRelease(event);
 }
 
@@ -207,7 +284,7 @@ static const CGFloat kMomentumMinimumSpeed = 30.0;
     if (self.isLeftMouseDown) {
         CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDragged, aLocation, kCGMouseButtonLeft);
         CGEventSetIntegerValueField(event, kCGMouseEventClickState, self.cursorClickCount);
-        CGEventPost(kCGHIDEventTap, event);
+        [self postSyntheticEvent:event];
         CFRelease(event);
         
     } else {
@@ -215,7 +292,7 @@ static const CGFloat kMomentumMinimumSpeed = 30.0;
         [self updateCursorClickCountWithLocation:aLocation];
         CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDown, aLocation, kCGMouseButtonLeft);
         CGEventSetIntegerValueField(event, kCGMouseEventClickState, self.cursorClickCount);
-        CGEventPost(kCGHIDEventTap, event);
+        [self postSyntheticEvent:event];
         CFRelease(event);
         
         self.isLeftMouseDown = YES;
@@ -227,7 +304,7 @@ static const CGFloat kMomentumMinimumSpeed = 30.0;
     if (self.isLeftMouseDown) {
         CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp, [self currentCursorLocation], kCGMouseButtonLeft);
         CGEventSetIntegerValueField(event, kCGMouseEventClickState, self.cursorClickCount);
-        CGEventPost(kCGHIDEventTap, event);
+        [self postSyntheticEvent:event];
         CFRelease(event);
         
         self.isLeftMouseDown = NO;
@@ -270,7 +347,7 @@ static const CGFloat kMomentumMinimumSpeed = 30.0;
 
     CGEventSetIntegerValueField(event, kCGScrollWheelEventScrollPhase, scrollPhase);
 
-    CGEventPost(kCGHIDEventTap, event);
+    [self postSyntheticEvent:event];
     CFRelease(event);
 }
 
@@ -283,7 +360,7 @@ static const CGFloat kMomentumMinimumSpeed = 30.0;
 
     CGEventSetIntegerValueField(event, kCGScrollWheelEventMomentumPhase, momentumPhase);
 
-    CGEventPost(kCGHIDEventTap, event);
+    [self postSyntheticEvent:event];
     CFRelease(event);
 }
 
@@ -419,7 +496,7 @@ static const CGFloat kMomentumMinimumSpeed = 30.0;
     
     CGEventSetIntegerValueField(event, 132, phase);
     
-    CGEventPost(kCGHIDEventTap, event);
+    [self postSyntheticEvent:event];
     CFRelease(event);
 }
 

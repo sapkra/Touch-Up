@@ -35,6 +35,7 @@ class TouchUp: NSObject, ObservableObject {
     @Published var isDraggingWithOneFingerEnabled = false
     @Published var isPressAndHoldEnabled = false
     @Published var isExclusiveAccessEnabled = false
+    @Published var isCursorHiddenEnabled = false
 
     @Published var areAdditionalDigitizerRotationSettingsVisible = false
 
@@ -107,6 +108,41 @@ class TouchUp: NSObject, ObservableObject {
         return String(cString: bytes)
     }
 
+    /// Whether the settings currently add up to the tablet-like combination below. Derived rather
+    /// than stored, so changing any one of the individual toggles simply drops out of the preset
+    /// instead of leaving a stored flag disagreeing with what the app actually does.
+    var isTabletModeActive: Bool {
+        isScrollingWithOneFingerEnabled
+            && isPressAndHoldEnabled
+            && isSecondaryClickEnabled
+            && isMagnificationEnabled
+            && isCursorHiddenEnabled
+            && !isClickOnLiftEnabled
+            && !isDraggingWithOneFingerEnabled
+            && holdDuration >= Self.tabletModeHoldDuration
+    }
+
+    /// iPadOS waits about half a second before a press becomes a long press. The previous default
+    /// of 0.1 s is short enough that an ordinary unhurried tap crosses it, which is why holding
+    /// used to trigger by accident.
+    static let tabletModeHoldDuration: TimeInterval = 0.5
+
+    /// One finger scrolls the content, a tap clicks, a long press picks things up, two fingers tap
+    /// for a secondary click and pinch to zoom — and no pointer. The individual settings stay
+    /// editable underneath; this only puts them in the right places at once.
+    func activateTabletMode() {
+        isScrollingWithOneFingerEnabled = true
+        isClickOnLiftEnabled = false
+        isDraggingWithOneFingerEnabled = false
+
+        isPressAndHoldEnabled = true
+        isSecondaryClickEnabled = true
+        isMagnificationEnabled = true
+        isCursorHiddenEnabled = true
+
+        holdDuration = Self.tabletModeHoldDuration
+    }
+
     func copyDiagnosticsToClipboard() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(diagnosticsReport, forType: .string)
@@ -171,6 +207,7 @@ extension TouchUp {
             "isDraggingWithOneFingerEnabled" : false,
             "isPressAndHoldEnabled" : false,
             "isExclusiveAccessEnabled" : false,
+            "isCursorHiddenEnabled" : false,
             "areAdditionalDigitizerRotationSettingsVisible" : false
         ])
         
@@ -193,7 +230,8 @@ extension TouchUp {
             $ignoreOriginTouches.assign(to: \.ignoreOriginTouches, on: touchManager),
             $isExclusiveAccessEnabled.sink { [weak self] enabled in
                 self?.touchManager.setTouchscreensSeized(enabled)
-            }
+            },
+            $isCursorHiddenEnabled.assign(to: \.hidesCursor, on: touchManager)
         ]
         
         
@@ -206,6 +244,7 @@ extension TouchUp {
         isDraggingWithOneFingerEnabled = defaults.bool(forKey: "isDraggingWithOneFingerEnabled")
         isPressAndHoldEnabled = defaults.bool(forKey: "isPressAndHoldEnabled")
         isExclusiveAccessEnabled = defaults.bool(forKey: "isExclusiveAccessEnabled")
+        isCursorHiddenEnabled = defaults.bool(forKey: "isCursorHiddenEnabled")
         areAdditionalDigitizerRotationSettingsVisible = defaults.bool(forKey: "areAdditionalDigitizerRotationSettingsVisible")
     }
     
@@ -227,6 +266,7 @@ extension TouchUp {
         defaults.set(isDraggingWithOneFingerEnabled, forKey: "isDraggingWithOneFingerEnabled")
         defaults.set(isPressAndHoldEnabled, forKey: "isPressAndHoldEnabled")
         defaults.set(isExclusiveAccessEnabled, forKey: "isExclusiveAccessEnabled")
+        defaults.set(isCursorHiddenEnabled, forKey: "isCursorHiddenEnabled")
         defaults.set(areAdditionalDigitizerRotationSettingsVisible, forKey: "areAdditionalDigitizerRotationSettingsVisible")
     }
 
@@ -507,6 +547,10 @@ extension TouchUp {
         case \.isClickOnLiftEnabled:
             return("Point and click",
                    "Very reduced input set for exhibits: Move cursor by dragging, and click by releasing. Overrides scrolling and dragging functionality.")
+
+        case \.isCursorHiddenEnabled:
+            return("Hide the Mouse Pointer",
+                   "There is no pointer on a tablet, and one that jumps to wherever you touched is the clearest reminder that you are steering a mouse. It reappears if you move a real mouse, and hides again on your next touch.")
 
         case \.isExclusiveAccessEnabled:
             return("Exclusive Access",

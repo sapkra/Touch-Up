@@ -84,6 +84,20 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)digitizerDrivesPointerForLocationID:(uint32_t)locationID;
 
 
+/**
+ Hides the mouse pointer, so touching the glass feels direct rather than like steering a mouse
+ from a distance. There is no pointer on a tablet.
+
+ The pointer still comes back on its own whenever something other than a touch moves it — a real
+ mouse or trackpad — and hides again on the next touch. Without that, plugging in a mouse would
+ leave a user hunting for an invisible pointer to reach the setting that turns this off.
+
+ Always restore this before the app exits; the underlying calls are process-scoped and there is
+ nothing to clean up after a crash.
+ */
+@property (nonatomic) BOOL hidesCursor;
+
+
 
 - (CGPoint)convertScreenPointRelativeToAbsolute:(CGPoint)relativePoint locationID:(uint32_t)locationID;
 

@@ -80,6 +80,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ aNotification: Notification) {
         // Insert code here to tear down your application
         self.model.persistAllDigitizerMappings()
+
+        // Before anything else: a hidden pointer is process state, so quitting while it is hidden
+        // would leave the user with no visible pointer and nothing left running to bring it back.
+        self.model.touchManager.hidesCursor = false
         self.model.touchManager.stop()
     }
 

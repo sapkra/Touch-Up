@@ -41,8 +41,29 @@ struct SettingsView: View {
     }
 
     
+    var tabletModeRow: some View {
+        HStack(alignment: .top) {
+            SettingsExplanationLabel(labels: ("iPad Mode",
+                                              "One finger scrolls, a tap clicks, a long press picks things up, two fingers tap for a secondary click, and pinch zooms — with no mouse pointer. Sets the options below; you can still change any of them afterwards."))
+
+            Spacer(minLength: 8)
+
+            if model.isTabletModeActive {
+                Label("Active", systemImage: "checkmark.circle.fill")
+                    .foregroundColor(.accentColor)
+                    .font(.caption)
+            } else {
+                Button("Use iPad Mode") { model.activateTabletMode() }
+                    .font(.caption)
+            }
+        }
+    }
+
+
     var gestureSettings: some View {
         Group {
+            tabletModeRow
+
             
             let mode_ = Binding {
                 if model.isClickOnLiftEnabled { return 2 }
@@ -76,6 +97,10 @@ struct SettingsView: View {
                 SettingsExplanationLabel(labels: model.uiLabels(for: \.isPressAndHoldEnabled))
             }
 
+            Toggle(isOn: $model.isCursorHiddenEnabled) {
+                SettingsExplanationLabel(labels: model.uiLabels(for: \.isCursorHiddenEnabled))
+            }
+
             Toggle(isOn: $model.isClickWindowToFrontEnabled) {
                 SettingsExplanationLabel(labels: model.uiLabels(for: \.isClickWindowToFrontEnabled))
             }
@@ -85,7 +110,9 @@ struct SettingsView: View {
     
     var parameterSettings: some View {
         Group {
-            Slider(value: $model.holdDuration, in: 0.0...0.16, step: 0.02){
+            // Reaches 0.8 s so a genuine long press is selectable at all: iPadOS uses about
+            // 0.5 s, and the old 0.16 s ceiling meant any unhurried tap counted as a hold.
+            Slider(value: $model.holdDuration, in: 0.0...0.8, step: 0.05){
                 SettingsExplanationLabel(labels: model.uiLabels(for: \.holdDuration))
             }
             

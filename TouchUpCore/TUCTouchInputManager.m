@@ -32,6 +32,10 @@
 /// recurs on every report is recorded once instead of flooding it.
 @property NSMutableSet<NSString *> *notedDeviceObservations;
 
+/// Watches for pointer movement that did not come from us, so a real mouse can bring the pointer
+/// back while `hidesCursor` is on.
+@property (strong) id foreignPointerMonitor;
+
 @end
 
 
@@ -74,6 +78,63 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
 - (void)setTouchscreensSeized:(BOOL)seized {
     SetTouchDevicesSeized(seized);
 }
+
+#pragma mark - Cursor Visibility
+
+@synthesize hidesCursor = _hidesCursor;
+
+- (void)setHidesCursor:(BOOL)hidesCursor {
+    _hidesCursor = hidesCursor;
+
+    [[TUCCursorUtilities sharedInstance] setIsCursorHidden:hidesCursor];
+
+    if (hidesCursor) {
+        [self startWatchingForForeignPointerMovement];
+    } else {
+        [self stopWatchingForForeignPointerMovement];
+    }
+}
+
+
+/**
+ Brings the pointer back as soon as something that is not us moves it.
+
+ Our own events are stamped with `kCGEventSourceUserData`, so anything arriving without that stamp
+ came from a real mouse or trackpad. Whoever is using one needs to see where it is — and would
+ otherwise have to find an invisible pointer to reach the setting that turns hiding off. Touching
+ the glass hides it again, so nothing about the tablet feel is lost.
+ */
+- (void)startWatchingForForeignPointerMovement {
+    if (self.foreignPointerMonitor != nil) {
+        return;
+    }
+
+    NSEventMask mask = NSEventMaskMouseMoved | NSEventMaskLeftMouseDragged
+                     | NSEventMaskRightMouseDragged | NSEventMaskOtherMouseDragged;
+
+    __weak typeof(self) weakSelf = self;
+    self.foreignPointerMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:mask handler:^(NSEvent *event) {
+        typeof(self) strongSelf = weakSelf;
+        if (strongSelf == nil || !strongSelf.hidesCursor) return;
+
+        CGEventRef cgEvent = event.CGEvent;
+        if (cgEvent == NULL) return;
+
+        int64_t source = CGEventGetIntegerValueField(cgEvent, kCGEventSourceUserData);
+        if (source != kTUCSyntheticEventUserData) {
+            [[TUCCursorUtilities sharedInstance] setIsCursorHidden:NO];
+        }
+    }];
+}
+
+
+- (void)stopWatchingForForeignPointerMovement {
+    if (self.foreignPointerMonitor != nil) {
+        [NSEvent removeMonitor:self.foreignPointerMonitor];
+        self.foreignPointerMonitor = nil;
+    }
+}
+
 
 - (void)setDigitizerDrivesPointer:(BOOL)drivesPointer forLocationID:(uint32_t)locationID {
     SetTouchDeviceDrivesPointer(locationID, drivesPointer);
@@ -177,6 +238,12 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
 
     if (isSuspectOriginReport && isOnSurface) {
         return;
+    }
+
+    // Touching hides the pointer again after a mouse brought it back. Cheap to do per report: the
+    // setter is a no-op unless the state actually changes.
+    if (self.hidesCursor && isOnSurface) {
+        [[TUCCursorUtilities sharedInstance] setIsCursorHidden:YES];
     }
 
     BOOL isNewTouch = NO;
@@ -976,6 +1043,10 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
     [report appendFormat:@"doubleClickTolerance: %.2f mm\n", self.doubleClickTolerance];
     [report appendFormat:@"errorResistance:      %ld reports\n", (long)self.errorResistance];
     [report appendFormat:@"ignoreOriginTouches:  %@\n", self.ignoreOriginTouches ? @"YES" : @"NO"];
+    [report appendFormat:@"hidesCursor:          %@%@\n",
+     self.hidesCursor ? @"YES" : @"NO",
+     self.hidesCursor && ![[TUCCursorUtilities sharedInstance] canHideCursorSystemWide]
+        ? @" (only while Touch Up is frontmost - the system-wide hook was unavailable)" : @""];
 
     [report appendString:@"\n───── HID discovery ─────\n"];
     const char *transcript = HIDDiagnostics();

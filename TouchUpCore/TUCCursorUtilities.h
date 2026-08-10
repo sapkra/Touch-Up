@@ -9,6 +9,11 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+/// Stamped into `kCGEventSourceUserData` on every event Touch Up injects, so our own synthetic
+/// input can be told apart from a real mouse or trackpad. Any distinctive value would do.
+static const int64_t kTUCSyntheticEventUserData = 0x54554348; // 'TUCH'
+
+
 @interface TUCCursorUtilities : NSObject
 
 + (instancetype)sharedInstance;
@@ -30,6 +35,22 @@ NS_ASSUME_NONNULL_BEGIN
  does not also emit a separate click.
  */
 @property (readonly) BOOL isLeftMouseDown;
+
+/**
+ Hides or restores the pointer.
+
+ There is no pointer on a tablet, and a pointer that teleports to wherever you touched is the
+ clearest reminder that you are driving a mouse by proxy. Hiding it is the single biggest change
+ to how direct the glass feels.
+
+ Idempotent, because the underlying CoreGraphics calls are balanced: calling hide twice and show
+ once would leave the pointer invisible with no obvious way back.
+ */
+@property (nonatomic) BOOL isCursorHidden;
+
+/// Whether hiding actually applies system-wide rather than only while Touch Up is frontmost.
+/// Reported in the diagnostics so a pointer that stubbornly reappears is explicable.
+@property (readonly) BOOL canHideCursorSystemWide;
 
 - (CGPoint)currentCursorLocation;
 
