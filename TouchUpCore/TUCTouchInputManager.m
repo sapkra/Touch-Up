@@ -61,6 +61,13 @@
 /// pointer back while `hidesCursor` is on.
 @property (strong) id foreignPointerMonitor;
 
+/// Polls the pointer's position while it is hidden. The monitor above only sees events that are
+/// delivered to it, and the devices that matter most here — a built-in trackpad among them — are
+/// refused before registration precisely because they must not be driven, so their input never
+/// reaches this process at all. Comparing where the pointer *is* against where we put it needs
+/// nothing to be delivered by anyone.
+@property (strong) NSTimer *pointerWatchTimer;
+
 /// The last handful of touches and what each was decided to be. Small and always on: when someone
 /// reports that tapping does nothing, this is the difference between reading the code and knowing.
 @property NSMutableArray<NSString *> *recentGestureLog;
@@ -134,6 +141,14 @@ static const NSTimeInterval kFingerCountSettleTime = 0.08;
  caused by treating that counter as a measure of time.
  */
 static const NSTimeInterval kAbandonedTouchTimeout = 0.5;
+
+/// How often the pointer is checked against where we last put it, while it is hidden. Four times a
+/// second costs nothing and is quick enough that reaching for a mouse feels like it just works.
+static const NSTimeInterval kPointerWatchInterval = 0.25;
+
+/// How far the pointer has to be from where we last put it to count as somebody else having moved
+/// it. A couple of points of slack, since the window server clamps to screen bounds and rounds.
+static const CGFloat kPointerMovedTolerance = 3.0;
 
 
 static NSString *TUCNameForGesture(TUCCursorGesture gesture) {
@@ -216,6 +231,49 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
 }
 
 
+- (void)startWatchingPointerPosition {
+    if (self.pointerWatchTimer != nil) {
+        return;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    self.pointerWatchTimer = [NSTimer scheduledTimerWithTimeInterval:kPointerWatchInterval
+                                                            repeats:YES
+                                                              block:^(NSTimer *timer) {
+        [weakSelf checkWhetherSomethingElseMovedThePointer];
+    }];
+}
+
+
+- (void)stopWatchingPointerPosition {
+    [self.pointerWatchTimer invalidate];
+    self.pointerWatchTimer = nil;
+}
+
+
+- (void)checkWhetherSomethingElseMovedThePointer {
+    TUCCursorUtilities *utils = [TUCCursorUtilities sharedInstance];
+
+    if (!self.hidesCursor || !utils.isCursorHidden) {
+        [self stopWatchingPointerPosition];
+        return;
+    }
+
+    // Mid-touch the pointer is ours by definition, and we are moving it constantly.
+    if ([self hasActiveTouchOnPointerDrivingDigitizer]) {
+        return;
+    }
+
+    CGPoint now = [utils currentCursorLocation];
+    CGPoint ours = utils.lastSyntheticPointerLocation;
+
+    if (hypot(now.x - ours.x, now.y - ours.y) > kPointerMovedTolerance) {
+        [utils setIsCursorHidden:NO];
+        [self stopWatchingPointerPosition];
+    }
+}
+
+
 /**
  Shows the pointer again as soon as something other than a finger moves it, and leaves it to the
  next touch to hide it again.
@@ -293,6 +351,8 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
         [NSEvent removeMonitor:self.foreignPointerMonitor];
         self.foreignPointerMonitor = nil;
     }
+
+    [self stopWatchingPointerPosition];
 }
 
 
@@ -456,6 +516,10 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     if (self.hidesCursor && isOnSurface) {
         BOOL isTheTouchscreen = TouchDeviceDrivesPointer(locationID);
         [[TUCCursorUtilities sharedInstance] setIsCursorHidden:isTheTouchscreen];
+
+        if (isTheTouchscreen) {
+            [self startWatchingPointerPosition];
+        }
     }
 
     BOOL isNewTouch = NO;
