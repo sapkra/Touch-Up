@@ -123,7 +123,7 @@ class TouchUp: NSObject, ObservableObject {
             && !isSecondaryClickEnabled
             && !isClickOnLiftEnabled
             && !isDraggingWithOneFingerEnabled
-            && !isClickWindowToFrontEnabled
+            && isClickWindowToFrontEnabled
             && holdDuration >= Self.tabletModeHoldDuration
             && tapDistance >= Self.tabletModeTapDistance
     }
@@ -170,9 +170,11 @@ class TouchUp: NSObject, ObservableObject {
         isSystemSwipeEnabled = true
         isCursorHiddenEnabled = true
 
-        // Off: it fires its own click on touch-down to raise a window, so a tap on anything not
-        // already frontmost actuates twice. Tapping simply works on a tablet.
-        isClickWindowToFrontEnabled = false
+        // On: tapping an app that is not focused should focus it and act on what you touched, in
+        // one tap, which is what a tablet does. It was off while this worked by injecting a second
+        // click, which made that tap actuate twice on some controls; it now activates the owning
+        // application instead and leaves exactly one click.
+        isClickWindowToFrontEnabled = true
 
         holdDuration = Self.tabletModeHoldDuration
         tapDistance = Self.tabletModeTapDistance
@@ -608,7 +610,7 @@ extension TouchUp {
             
         case \.isClickWindowToFrontEnabled:
             return("Bring Windows to Front",
-                   "When touching a window that is not frontmost, bring it to front first. (EXPERIMENTAL)")
+                   "Touching a window that is not in front focuses it and acts on what you touched, in one tap. Without this, the first tap only brings the window forward and you have to tap again.")
             
         case \.isClickOnLiftEnabled:
             return("Point and click",
