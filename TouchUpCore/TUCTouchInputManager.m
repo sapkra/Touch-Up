@@ -123,6 +123,18 @@ static const NSTimeInterval kForeignPointerGracePeriod = 0.2;
  */
 static const NSTimeInterval kFingerCountSettleTime = 0.08;
 
+/**
+ How long since its last report a contact is abandoned and no longer treated as a finger on the
+ glass.
+
+ `errorResistance` already reaps stale contacts, but it counts *reports*, and the frame counter only
+ advances while the device is sending them. A device that goes quiet between touches therefore ages
+ nothing out at all, so contacts survive indefinitely — and a wall clock is the only thing that can
+ say a finger is gone when nothing is being reported. This is the third distinct bug in this branch
+ caused by treating that counter as a measure of time.
+ */
+static const NSTimeInterval kAbandonedTouchTimeout = 0.5;
+
 
 static NSString *TUCNameForGesture(TUCCursorGesture gesture) {
     switch (gesture) {
@@ -325,7 +337,9 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     for (TUCTouch *touch in self.touchSet) {
         if (touch.locationID != locationID) continue;
 
-        if (touch.lastUpdated + self.errorResistance < currentFrameID) {
+        BOOL missedTooManyReports = touch.lastUpdated + self.errorResistance < currentFrameID;
+
+        if (missedTooManyReports || [self hasTouchBeenAbandoned:touch]) {
             [touch setPhase:NSTouchPhaseCancelled];
             [self removeTouch:touch now:NO];
         }
@@ -1198,6 +1212,11 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
 }
 
 
+- (BOOL)hasTouchBeenAbandoned:(TUCTouch *)touch {
+    return ([NSDate timeIntervalSinceReferenceDate] - touch.lastUpdatedTime) > kAbandonedTouchTimeout;
+}
+
+
 /**
  Checks the touch set if a touch exists
  */
@@ -1214,6 +1233,17 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
  */
 - (TUCTouch *)obtainTouchWithID:(NSInteger)contactID locationID:(uint32_t)locationID isNew:(BOOL*)isNew {
     TUCTouch *touch = [self findTouchWithID:contactID locationID:locationID includingPastTouches:NO];
+
+    // A contact whose last report is old is not the finger now arriving under the same ID. Reusing
+    // it silently inherits the whole of the previous touch's gesture state, and the hold clock is
+    // the damaging part: it still reads from when that earlier finger landed, so it is already past
+    // the hold duration and a short tap opens a context menu the instant it is touched.
+    if (touch != nil && [self hasTouchBeenAbandoned:touch]) {
+        [touch setPhase:NSTouchPhaseCancelled];
+        [self removeTouch:touch now:YES];
+        touch = nil;
+    }
+
     *isNew = NO;
     if(!touch) {
         touch = [[TUCTouch alloc] initWithContactID:contactID locationID:locationID];
