@@ -35,6 +35,7 @@
 @property CGPoint swipeBaselineMidpoint;
 @property BOOL didRecogniseSwipe;
 @property CGFloat swipeFurthestTravel; // mm, for the diagnostics when a sweep never commits
+@property CGFloat swipeBaselineSpread; // how far the fingers sat from their midpoint, in mm
 
 /// Inter-finger spread and midpoint when the second finger arrived, in mm and relative
 /// coordinates. A two-finger gesture is pinch or pan depending on which of the two has moved
@@ -232,7 +233,10 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
         return;
     }
 
-    if ([[self activeTouches] count] > 0) {
+    // Contacts on a device that is not driving the pointer say nothing about whether a real one is
+    // being used — and a hand resting on a trackpad would otherwise keep the pointer hidden for as
+    // long as it stayed there.
+    if ([self hasActiveTouchOnPointerDrivingDigitizer]) {
         return;
     }
 
@@ -243,6 +247,16 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     }
 
     [[TUCCursorUtilities sharedInstance] setIsCursorHidden:NO];
+}
+
+
+- (BOOL)hasActiveTouchOnPointerDrivingDigitizer {
+    for (TUCTouch *touch in [self activeTouches]) {
+        if (TouchDeviceDrivesPointer(touch.locationID)) {
+            return YES;
+        }
+    }
+    return NO;
 }
 
 
@@ -403,7 +417,12 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
 
     // Touching hides the pointer again after a mouse brought it back. Cheap to do per report: the
     // setter is a no-op unless the state actually changes.
-    if (self.hidesCursor && isOnSurface) {
+    //
+    // Only for a digitizer that is actually driving the pointer. Matching was broadened to include
+    // devices that call themselves trackpads, so a built-in trackpad can end up registered here
+    // even though it is not allowed to produce input — and hiding the pointer the moment a finger
+    // lands on it is precisely backwards.
+    if (self.hidesCursor && isOnSurface && TouchDeviceDrivesPointer(locationID)) {
         [[TUCCursorUtilities sharedInstance] setIsCursorHidden:YES];
     }
 
@@ -770,9 +789,20 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
         midpoint.y += touch.location.y / touches.count;
     }
 
+    // How far the fingers sit from their own midpoint. A sweep leaves this alone and moves the
+    // midpoint; fingers closing or opening move this and leave the midpoint roughly where it was.
+    // Comparing the two is what distinguishes "all three went the same way" from "three fingers
+    // moved, but not together" — the midpoint alone cannot tell those apart, and a three-finger
+    // pinch would shift it enough to change desktop.
+    CGFloat spread = 0;
+    for (TUCTouch *touch in touches) {
+        spread += [screen millimetreDistanceBetweenRelativePoint:touch.location and:midpoint] / touches.count;
+    }
+
     if (!self.hasSwipeBaseline) {
         self.hasSwipeBaseline = YES;
         self.swipeBaselineMidpoint = midpoint;
+        self.swipeBaselineSpread = spread;
         self.swipeFurthestTravel = 0;
 
         [self logGesture:[NSString stringWithFormat:@"%lu fingers down, watching for a sweep",
@@ -797,6 +827,11 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     self.swipeFurthestTravel = MAX(self.swipeFurthestTravel, travel);
 
     if (travel < kSwipeCommitDistance) {
+        return;
+    }
+
+    // Far enough, but only a sweep if the fingers travelled together rather than apart.
+    if (fabs(spread - self.swipeBaselineSpread) > travel) {
         return;
     }
 
