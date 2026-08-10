@@ -138,6 +138,12 @@ void ResetHIDDiagnostics(void) {
     gDiagnosticsDidTruncate = false;
 }
 
+void LogToHIDDiagnostics(const char *message) {
+    if (message) {
+        DiagLog("%s\n", message);
+    }
+}
+
 
 /// Copies a string device property, or "-" when the device does not publish it.
 static void CopyDeviceStringProperty(IOHIDDeviceRef dev, CFStringRef key, char *out, size_t outSize) {

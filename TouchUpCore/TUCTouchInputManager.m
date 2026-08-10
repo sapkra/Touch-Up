@@ -22,10 +22,15 @@
 @property BOOL cursorTouchDidHold; //
 @property CGPoint cursorTouchStationaryAnchor; // reference point the hold clock is measured against
 @property (strong) NSDate *cursorTouchStationarySinceDate;
+@property BOOL cursorTouchDidActuatePress; // YES once this touch has put the mouse button down
 
 @property CGFloat pinchDistance;
 
 @property TUCCursorGesture identifiedMultitouchGesture;
+
+/// Keys of observations already written to the diagnostics transcript, so a condition that
+/// recurs on every report is recorded once instead of flooding it.
+@property NSMutableSet<NSString *> *notedDeviceObservations;
 
 @end
 
@@ -128,6 +133,24 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
 }
 
 
+/**
+ Records something learned about a digitizer while interpreting its touches, at most once per
+ device per `key`. These conditions are per-report by nature, so they would otherwise fill the
+ transcript — but they are exactly what turns "my taps do nothing" into an answer, so they
+ belong in the report a user pastes into an issue.
+ */
+- (void)noteOnceForLocationID:(uint32_t)locationID key:(NSString *)key message:(NSString *)message {
+    NSString *identity = [NSString stringWithFormat:@"%u/%@", locationID, key];
+    if ([self.notedDeviceObservations containsObject:identity]) {
+        return;
+    }
+    [self.notedDeviceObservations addObject:identity];
+
+    NSString *line = [NSString stringWithFormat:@"note: digitizer %#010x %@", locationID, message];
+    LogToHIDDiagnostics(line.UTF8String);
+}
+
+
 - (void)stopCurrentGesture {
     [[TUCCursorUtilities sharedInstance] stopDraggingCursor];
     [[TUCCursorUtilities sharedInstance] stopMagnifying];
@@ -142,26 +165,47 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
  */
 - (void)updateTouch:(NSInteger)contactID locationID:(uint32_t)locationID withLocation:(CGPoint)digitizerPoint onSurface:(BOOL)isOnSurface tooLargeForFinger:(BOOL)confidenceFlag {
     
-    // assume that this is an erroneous message!!!
-    if (self.ignoreOriginTouches && CGPointEqualToPoint(digitizerPoint, CGPointZero)) {
+    // A report at the exact origin is the erroneous data `ignoreOriginTouches` exists for — but
+    // only while the finger is still on the glass. A lift-off report is about the finger being
+    // gone, not about where it is, and plenty of digitizers zero their coordinates to say so.
+    //
+    // Dropping it strands the touch: it never reaches NSTouchPhaseEnded, goes stale after
+    // `errorResistance` reports and is cancelled instead, so the tap the user just made produces
+    // no click at all — only the cursor move from touch-down. Turning the option on to fix
+    // spurious touches therefore broke clicking for exactly the devices that need it.
+    BOOL isSuspectOriginReport = self.ignoreOriginTouches && CGPointEqualToPoint(digitizerPoint, CGPointZero);
+
+    if (isSuspectOriginReport && isOnSurface) {
         return;
     }
-    
-    CGPoint point = [self convertDigitizerPointToRelativeScreenPoint:digitizerPoint locationID:locationID];
-    
+
     BOOL isNewTouch = NO;
     TUCTouch *touch = [self obtainTouchWithID:contactID locationID:locationID isNew:&isNewTouch];
-    
-    if (isNewTouch && (self.cursorTouch == nil || !self.cursorTouch.isActive)) {
+
+    // Keep the last known position when the lift-off report has none to give. The click this tap
+    // is about to produce is posted at `touch.location`, so taking the reported zeroes would put
+    // it in the top-left corner of the screen.
+    if (!isSuspectOriginReport) {
+        [touch setLocation:[self convertDigitizerPointToRelativeScreenPoint:digitizerPoint locationID:locationID]];
+    } else {
+        [self noteOnceForLocationID:locationID
+                               key:@"zeroed-lift"
+                           message:@"reports zeroed coordinates on lift-off; keeping the last known position. "
+                                    "This is the report `ignoreOriginTouches` used to discard, which left taps unable to click."];
+    }
+
+    // A contact that is already gone the first time we see it has no position worth anything and
+    // must never become the touch that drives the cursor.
+    if (isNewTouch && isOnSurface && (self.cursorTouch == nil || !self.cursorTouch.isActive)) {
         self.cursorTouch = touch;
-        self.cursorTouchOrigin = point;
+        self.cursorTouchOrigin = touch.location;
         self.cursorTouchQualifiedForTap = YES;
         self.cursorTouchDidHold = NO;
-        self.cursorTouchStationaryAnchor = point;
+        self.cursorTouchDidActuatePress = NO;
+        self.cursorTouchStationaryAnchor = touch.location;
         self.cursorTouchStationarySinceDate = [NSDate date];
     }
-    
-    [touch setLocation: point];
+
     [touch setIsOnSurface:isOnSurface];
     [touch setConfidenceFlag:confidenceFlag];
     [touch setLastUpdated:[self currentFrameIDForLocationID:locationID]];
@@ -288,6 +332,13 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
     NSArray<TUCTouch *> *touches = [[self activeTouches] allObjects];
     NSTouchPhase phase = cursorTouch.phase;
 
+    // Latch rather than sample at lift-off: `didProcessReportForLocationID` ends the gesture —
+    // and so releases the button — before the final pass gets here, so by then the button is
+    // always up and a press that really happened would look like it never did.
+    if ([[TUCCursorUtilities sharedInstance] isLeftMouseDown]) {
+        self.cursorTouchDidActuatePress = YES;
+    }
+
     [self updateHoldState];
 
 
@@ -304,17 +355,30 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
     }
 
 
-    else if (phase == NSTouchPhaseEnded) {
+    else if (phase == NSTouchPhaseEnded || phase == NSTouchPhaseCancelled) {
         // A running multitouch gesture owns the lift-off: `stopCurrentGesture` posts its
         // terminating event (the final magnify, say) and no click may follow it.
         BOOL wasMultitouchGesture = self.identifiedMultitouchGesture != _TUCCursorGestureNone;
 
-        // Read before anything below releases the button. If the press was already actuated
-        // while the finger rested — a hold mapped to a drag — then the lift is that press's
-        // release, and adding a click on top would actuate the same touch twice.
-        BOOL didActuatePress = [[TUCCursorUtilities sharedInstance] isLeftMouseDown];
+        // If this touch already actuated a press — a hold mapped to a drag — then the lift is
+        // that press's release, and adding a click on top would actuate the same touch twice.
+        BOOL didActuatePress = self.cursorTouchDidActuatePress;
 
-        if (!wasMultitouchGesture) {
+        // A cancelled touch is one the digitizer stopped reporting rather than released. If it
+        // never left the tap slop then the user did tap and only the release went missing, and
+        // discarding that is the worst available reading of a device we already tolerate losing
+        // reports from — that tolerance is what `errorResistance` is for. A cancelled touch that
+        // had moved is genuinely lost mid-gesture, so it ends quietly instead.
+        BOOL wasLostMidGesture = (phase == NSTouchPhaseCancelled) && !self.cursorTouchQualifiedForTap;
+
+        if (phase == NSTouchPhaseCancelled && !wasLostMidGesture) {
+            [self noteOnceForLocationID:cursorTouch.locationID
+                                   key:@"tap-via-cancel"
+                               message:@"does not report a lift-off for every touch; a stationary "
+                                        "touch that simply stopped being reported is being treated as a tap."];
+        }
+
+        if (!wasMultitouchGesture && !wasLostMidGesture) {
             if (self.cursorTouchDidHold) {
                 [self performMouseEventForGesture:TUCCursorGestureHoldAndDrag];
             } else if (!self.cursorTouchQualifiedForTap) {
@@ -324,16 +388,11 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
 
         [self stopCurrentGesture];
 
-        if (!wasMultitouchGesture && self.cursorTouchQualifiedForTap && !didActuatePress) {
+        if (!wasMultitouchGesture && !wasLostMidGesture
+            && self.cursorTouchQualifiedForTap && !didActuatePress) {
             [self performMouseEventForGesture:TUCCursorGestureTap];
         }
 
-        return;
-    }
-    
-    
-    else if (phase == NSTouchPhaseCancelled) {
-        [self stopCurrentGesture];
         return;
     }
     
@@ -837,6 +896,7 @@ static const CGFloat kPhaseMovementThreshold = 0.1;
         self.cursorTouchStationarySinceDate = nil;
 
         self.frameIDsByLocationID = [NSMutableDictionary new];
+        self.notedDeviceObservations = [NSMutableSet new];
         self.identifiedMultitouchGesture = _TUCCursorGestureNone;
 
         self.doubleClickTolerance = 5;

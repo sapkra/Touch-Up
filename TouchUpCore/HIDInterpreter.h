@@ -37,6 +37,10 @@ const char *HIDDiagnostics(void);
 /// Whether the transcript hit its capacity and is missing its tail.
 bool HIDDiagnosticsDidTruncate(void);
 
+/// Appends a line to the transcript from the layers above, so an observation about a device
+/// made while interpreting its touches lands in the same report as its descriptor.
+void LogToHIDDiagnostics(const char *message);
+
 /// Drops the transcript so a fresh one can be gathered (e.g. before asking the user to
 /// re-plug a device).
 void ResetHIDDiagnostics(void);
