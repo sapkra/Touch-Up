@@ -9,6 +9,7 @@
 
 #import "HIDInterpreter.h"
 #import "TUCCursorUtilities.h"
+#import "TUCSurfaceProbe.h"
 
 #import <Carbon/Carbon.h> // key codes for the system navigation shortcuts
 
@@ -28,6 +29,35 @@
 @property BOOL cursorTouchDidActuateLongPress; // YES once this touch has opened a context menu
 @property BOOL cursorTouchSawMultipleFingers; // YES if another finger was ever down alongside it
 @property NSTimeInterval cursorTouchBeganTime; // when the cursor touch landed, for concurrency tests
+
+/// What the cursor touch landed on, how well that is known, and where it was asked about.
+///
+/// Every one of these is written on the main thread only — from the adoption block, which is the
+/// single place any `cursorTouch*` field is reset, and from `-acceptSurfaceReading:`, which the
+/// probe hops back to the main queue to call. Nothing here is ever touched from the probe's own
+/// queue, which is what keeps all of it free of locks and atomics.
+@property TUCSurfaceKind cursorTouchSurface;
+@property TUCSurfaceSource cursorTouchSurfaceSource;
+@property TUCSurfaceState cursorTouchSurfaceState;
+@property CGPoint cursorTouchSurfaceProbePoint; // relative coordinates, where the probe was fired
+@property BOOL cursorTouchSurfaceIsFrozen; // an action has committed; no late answer may change it
+
+/// Rises once per cursor touch, and never resets.
+///
+/// A probe carries the value it was fired under and its answer is refused unless it still matches.
+/// Monotone rather than a "is a touch down" flag because that flag is subject to ABA: a probe fired
+/// for one finger, answering after that finger lifted and the next one landed, would find the flag
+/// set both times and be applied to the wrong finger. A tap on the desktop followed by a flick on a
+/// web page is the ordinary way that happens, not an exotic one.
+@property uint64_t surfaceProbeGeneration;
+
+/// Counts behind the surface section of the diagnostics report. Main thread only, like the latch,
+/// which is why none of them needs to be atomic: they are only ever touched from
+/// `-acceptSurfaceReading:`, and that runs here.
+@property NSUInteger surfaceReadingsDelivered;
+@property NSUInteger surfaceLateAnswerCount;         // arrived for a finger that had already gone
+@property NSUInteger surfaceAnswersInTimeCount;      // arrived before anything had to be decided
+@property NSUInteger surfaceLateDisagreementCount;   // arrived after, and contradicted the decision
 
 /// Midpoint of three or more fingers when they were first all down, and whether their sweep has
 /// already been acted on.
@@ -165,6 +195,38 @@ static NSString *TUCNameForGesture(TUCCursorGesture gesture) {
         case TUCCursorGestureSwipeUp:         return @"SwipeUp";
         case TUCCursorGestureSwipeDown:       return @"SwipeDown";
         case _TUCCursorGestureNone:           return @"None";
+    }
+    return @"?";
+}
+
+static NSString *TUCNameForSurface(TUCSurfaceKind surface) {
+    switch (surface) {
+        case TUCSurfaceKindUnknown:      return @"?";
+        case TUCSurfaceKindDesktop:      return @"desktop";
+        case TUCSurfaceKindWindowChrome: return @"chrome";
+        case TUCSurfaceKindScrollArea:   return @"scrollArea";
+        case TUCSurfaceKindControl:      return @"control";
+        case TUCSurfaceKindTextArea:     return @"textArea";
+        case TUCSurfaceKindContent:      return @"content";
+    }
+    return @"?";
+}
+
+static NSString *TUCNameForSurfaceSource(TUCSurfaceSource source) {
+    switch (source) {
+        case TUCSurfaceSourceNone:       return @"not asked";
+        case TUCSurfaceSourceWindowList: return @"windowlist";
+        case TUCSurfaceSourceAXElement:  return @"ax";
+    }
+    return @"?";
+}
+
+static NSString *TUCNameForSurfaceState(TUCSurfaceState state) {
+    switch (state) {
+        case TUCSurfaceStateNone:        return @"off";
+        case TUCSurfaceStatePending:     return @"pending";
+        case TUCSurfaceStateKnown:       return @"known";
+        case TUCSurfaceStateUnavailable: return @"unavailable";
     }
     return @"?";
 }
@@ -335,6 +397,27 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
 
 - (BOOL)digitizerDrivesPointerForLocationID:(uint32_t)locationID {
     return TouchDeviceDrivesPointer(locationID);
+}
+
+
+- (TUCDigitizerKind)digitizerKindForLocationID:(uint32_t)locationID {
+    switch (TouchDeviceHIDPrimaryUsage(locationID)) {
+        case kHIDUsage_Dig_TouchScreen: return TUCDigitizerKindTouchScreen;
+        case kHIDUsage_Dig_TouchPad:    return TUCDigitizerKindTouchPad;
+        case kHIDUsage_Dig_Digitizer:   return TUCDigitizerKindDigitizer;
+        default:                        return TUCDigitizerKindUnknown;
+    }
+}
+
+
+static NSString *TUCNameForDigitizerKind(TUCDigitizerKind kind) {
+    switch (kind) {
+        case TUCDigitizerKindTouchScreen: return @"TouchScreen";
+        case TUCDigitizerKindTouchPad:    return @"TouchPad";
+        case TUCDigitizerKindDigitizer:   return @"Digitizer";
+        case TUCDigitizerKindUnknown:     return @"nothing it would name";
+    }
+    return @"?";
 }
 
 
@@ -535,6 +618,26 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
         self.cursorTouchBeganTime = [NSDate timeIntervalSinceReferenceDate];
         self.cursorTouchStationaryAnchor = touch.location;
         self.cursorTouchStationarySinceDate = [NSDate date];
+
+        // A new finger is a new question. Bumping the generation here is also what disowns any
+        // answer still in flight for the finger before this one.
+        // Told to the probe as well, so anything still queued for the previous finger discovers it is
+        // unwanted when its turn comes and gives up without troubling another application.
+        //
+        // Guarded, not merely cheap-when-off: the first message to `TUCSurfaceProbe` is what brings
+        // the class to life, along with its queue and the notifications it watches to know when what
+        // it remembers has gone stale. Somebody who never turns this on should never pay for any of
+        // that, and unconditionally naming the class here would have them pay on their first touch.
+        self.surfaceProbeGeneration++;
+        if (self.classifiesSurfaces) {
+            [TUCSurfaceProbe noteCurrentGeneration:self.surfaceProbeGeneration];
+        }
+
+        self.cursorTouchSurface = TUCSurfaceKindUnknown;
+        self.cursorTouchSurfaceSource = TUCSurfaceSourceNone;
+        self.cursorTouchSurfaceState = TUCSurfaceStateNone;
+        self.cursorTouchSurfaceProbePoint = touch.location;
+        self.cursorTouchSurfaceIsFrozen = NO;
     }
 
     [touch setIsOnSurface:isOnSurface];
@@ -595,12 +698,45 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
  tap degraded into a drag, so touching an item only moved the cursor there and never
  clicked it — and hold-and-drag could never arm either.
  */
+/**
+ How far the finger may wander and still be a tap, for the surface it is actually on.
+
+ The tap slop exists to stop noise turning every tap into a drag, and on ordinary content a couple of
+ millimetres of it costs nothing. On a title bar or a slider it costs something visible: the window
+ or the thumb does not move until the finger has already travelled, which reads as the control being
+ stuck and then jumping to catch up.
+
+ The floor is `kHoldStillnessTolerance`'s value, for the same reason that constant has it — it is the
+ smallest radius that still absorbs a finger settling onto the glass. And it is a floor rather than a
+ replacement, so a user who raised the tolerance because their panel is noisy keeps the benefit of
+ having done so.
+ */
+static const CGFloat kDirectManipulationTolerance = 1.0;
+
+- (CGFloat)effectiveTapTolerance {
+    switch (self.cursorTouchSurface) {
+        case TUCSurfaceKindWindowChrome:
+        case TUCSurfaceKindControl:
+            // Only on an answer from the element itself. A title bar guessed from a rectangle is not
+            // worth narrowing the slop for — see `-windowSurfaceForPoint:locationID:` on what a
+            // full-screen game looks like from there.
+            if (self.cursorTouchSurfaceSource == TUCSurfaceSourceAXElement) {
+                return MIN(self.tapTolerance, kDirectManipulationTolerance);
+            }
+            return self.tapTolerance;
+
+        default:
+            return self.tapTolerance;
+    }
+}
+
+
 - (void)updateTapAndHoldStateForCursorTouch:(TUCTouch *)touch onScreen:(TUCScreen *)screen {
 
     // A touch stays a tap until the finger leaves a slop radius around where it landed.
     // Once it has left, it can never become a tap again.
     if (self.cursorTouchQualifiedForTap
-        && [screen millimetreDistanceBetweenRelativePoint:touch.location and:self.cursorTouchOrigin] > self.tapTolerance) {
+        && [screen millimetreDistanceBetweenRelativePoint:touch.location and:self.cursorTouchOrigin] > [self effectiveTapTolerance]) {
 
         self.cursorTouchQualifiedForTap = NO;
         self.cursorTouchStationarySinceDate = nil;
@@ -646,13 +782,187 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     // Fire it here, with the finger still down, rather than waiting for the lift. A tablet opens
     // the menu under your finger while you hold, and that feedback is the point: without it you
     // hold, see nothing, and only discover on release whether you got a click or a menu.
-    //
-    // Once it has fired the touch is spent. Anything further from it is ignored — a menu is open,
-    // and the way to choose from a menu is to tap an item, exactly as with a real right-click.
-    if ([self actionForGesture:TUCCursorGestureLongPress] != TUCCursorActionNone) {
-        [self performMouseEventForGesture:TUCCursorGestureLongPress];
-        self.cursorTouchDidActuateLongPress = YES;
+    TUCCursorAction holdAction = [self actionForGesture:TUCCursorGestureLongPress];
+    if (holdAction == TUCCursorActionNone) {
+        return;
     }
+
+    [self performMouseEventForGesture:TUCCursorGestureLongPress];
+
+    // Only a menu spends the touch. Once one is open, anything further from the same finger is
+    // ignored — the way to choose from a menu is to tap an item, exactly as with a real
+    // right-click.
+    //
+    // A hold that took the mouse *button* down has not finished: the movement after it is the drag
+    // it just armed, which is how text gets selected and how something gets picked up. Latching
+    // both cases as spent — which is what this used to do — meant the advice in this method's own
+    // documentation, to map the hold to a drag and hold the button while the finger rests, pressed
+    // the button and then froze the finger, because `processTouchesForCursorInput` reads this latch
+    // to suppress all further movement.
+    self.cursorTouchDidActuateLongPress = (holdAction == TUCCursorActionSecondaryClick);
+}
+
+
+/**
+ Works out what the cursor touch landed on, as far as can be done without leaving this thread.
+
+ Runs once per touch, at touchdown. Never per report.
+
+ The window list is a synchronous round trip to the window server: measured at roughly 0.6 ms with
+ fifty windows open, plus about 5 ms the first time, before the connection is warm. Once per finger
+ that is nothing, and it is the same cost `-applicationToRaiseForPoint:` already pays on this path.
+ Once per *report* it would be several milliseconds of added latency on every movement of every
+ finger, which reads as the whole driver being sluggish and would be very hard to attribute back
+ to here.
+ */
+- (void)classifySurfaceForCursorTouch {
+    if (!self.classifiesSurfaces) {
+        return;
+    }
+
+    TUCTouch *touch = self.cursorTouch;
+    if (touch == nil) {
+        return;
+    }
+
+    // With no screen resolved, `convertScreenPointRelativeToAbsolute:` has nothing to convert
+    // against and the point it returns describes nowhere. Classifying it would report confident
+    // nonsense about a random place on a random display.
+    if ([self touchscreenForLocationID:touch.locationID] == nil) {
+        return;
+    }
+
+    CGPoint screenLocation = [self convertScreenPointRelativeToAbsolute:touch.location
+                                                            locationID:touch.locationID];
+
+    self.cursorTouchSurface = [self windowSurfaceForPoint:screenLocation
+                                              locationID:touch.locationID];
+    self.cursorTouchSurfaceSource = TUCSurfaceSourceWindowList;
+    self.cursorTouchSurfaceProbePoint = touch.location;
+
+    // The window list cannot see inside a window, so anything it could not name is still an open
+    // question that something slower may yet answer. Anything it *did* name, it named for certain.
+    self.cursorTouchSurfaceState = (self.cursorTouchSurface == TUCSurfaceKindUnknown)
+        ? TUCSurfaceStatePending
+        : TUCSurfaceStateKnown;
+
+    // Nothing under the point is the one thing the window list is the final authority on, and it
+    // established it without talking to anybody. Asking again could only be slower and less certain.
+    if (self.cursorTouchSurface == TUCSurfaceKindDesktop) {
+        return;
+    }
+
+    // Everything else goes to the slow half — including a title bar the geometry thinks it found,
+    // because a guess from a rectangle is not enough to start dragging a window with, and only the
+    // element itself can promote it.
+    // State is left as the window list set it. A title bar it recognised really is known — just not
+    // well enough to press the mouse button on, which is what `surfaceSource` is for. Calling it
+    // Pending here would be saying the surface is unknown while naming it in the same breath.
+    uint64_t generation = self.surfaceProbeGeneration;
+    NSUUID *touchID = touch.uuid;
+    __weak TUCTouchInputManager *weakSelf = self;
+
+    TUCSurfaceProbeRequest *request =
+        [[TUCSurfaceProbeRequest alloc] initWithScreenPoint:screenLocation
+                                                generation:generation
+                                                   touchID:touchID];
+
+    [TUCSurfaceProbe probeSurfaceForRequest:request completion:^(TUCSurfaceReading *reading) {
+        [weakSelf acceptSurfaceReading:reading];
+    }];
+}
+
+
+/**
+ How far (mm) the finger may have travelled since a probe was fired for its answer to still be about
+ anywhere useful.
+
+ Much larger than `tapTolerance`, and not a re-probing threshold: the job is only to refuse an answer
+ about a place the finger has plainly left. "The answer came back about somewhere I had already moved
+ away from" is the exact shape a misclassification report takes, which is why it is logged rather than
+ dropped silently.
+ */
+static const CGFloat kSurfaceProbeStaleDistance = 10.0;
+
+
+/**
+ Takes delivery of a probe's answer. Main thread only — the probe hops back here to call it.
+
+ This latches and does not decide. Every gesture decision in this class runs once per report against a
+ consistent set of state, and a second path that could commit a gesture from outside the report stream
+ is precisely the shape of the bug that once let a finished touch re-enter the lift-off branch and
+ emit its tap a second time. So: store the answer, and let the next report use it.
+ */
+- (void)acceptSurfaceReading:(TUCSurfaceReading *)reading {
+    self.surfaceReadingsDelivered++;
+
+    // The finger this was about has lifted, or the next one has already landed. Applying it now would
+    // classify the current finger by where the previous one happened to be.
+    if (reading.generation != self.surfaceProbeGeneration) {
+        self.surfaceLateAnswerCount++;
+        return;
+    }
+
+    // A probe that could not read anything must not overwrite what the window list established. It
+    // does settle the question of whether waiting would help, though: it would not.
+    if (reading.surface == TUCSurfaceKindUnknown) {
+        // Only downgrades a question that was still open. If the window list named this surface, that
+        // answer stands — the probe failing to add detail is not evidence against it.
+        if (self.cursorTouchSurface == TUCSurfaceKindUnknown) {
+            self.cursorTouchSurfaceState = TUCSurfaceStateUnavailable;
+        }
+        [self logGesture:[NSString stringWithFormat:@"  probe: nothing readable after %.0f ms (AXError %d)",
+                          reading.latency * 1000.0, (int)reading.error]];
+        return;
+    }
+
+    // First real answer wins. A second could only be about a different place.
+    if (self.cursorTouchSurfaceSource == TUCSurfaceSourceAXElement) {
+        return;
+    }
+
+    TUCTouch *touch = self.cursorTouch;
+    TUCScreen *screen = touch ? [self touchscreenForLocationID:touch.locationID] : nil;
+    if (screen != nil) {
+        CGFloat travelled = [screen millimetreDistanceBetweenRelativePoint:touch.location
+                                                                      and:self.cursorTouchSurfaceProbePoint];
+        if (travelled > kSurfaceProbeStaleDistance) {
+            [self logGesture:[NSString stringWithFormat:
+                              @"  probe: too late after %.0f ms — finger had moved %.1f mm",
+                              reading.latency * 1000.0, travelled]];
+            return;
+        }
+    }
+
+    // An action has already committed. Changing the surface now would mean, at worst, a scroll
+    // gesture left open while the mouse button goes down in the middle of a flick.
+    if (self.cursorTouchSurfaceIsFrozen) {
+        if (reading.surface != self.cursorTouchSurface) {
+            self.surfaceLateDisagreementCount++;
+            [self logGesture:[NSString stringWithFormat:
+                              @"  probe: %@ after %.0f ms, but already committed to %@",
+                              TUCNameForSurface(reading.surface), reading.latency * 1000.0,
+                              TUCNameForSurface(self.cursorTouchSurface)]];
+        }
+        return;
+    }
+
+    self.cursorTouchSurface = reading.surface;
+    self.cursorTouchSurfaceSource = reading.source;
+    self.cursorTouchSurfaceState = TUCSurfaceStateKnown;
+
+    // Counted here, at the one point where an answer is both usable and actually used, rather than on
+    // arrival. Counting arrivals would fold in every answer that was then refused as stale, as second,
+    // or as too late — and the whole worth of this figure is that it says how often the mechanism
+    // reached a gesture in time to change it, which is the question of whether it earns its keep at
+    // all. It cannot be read off the latency: what matters is not how long the answer took but whether
+    // it beat the finger, and how fast the finger moves is the user's business.
+    if (self.cursorTouchQualifiedForTap) {
+        self.surfaceAnswersInTimeCount++;
+    }
+
+    [self logGesture:[NSString stringWithFormat:@"  probe: %@ after %.0f ms",
+                      TUCNameForSurface(reading.surface), reading.latency * 1000.0]];
 }
 
 
@@ -715,6 +1025,11 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
 
 
     if (phase == NSTouchPhaseBegan) {
+        // Before the gesture, so `TouchDown` itself already sees the cheap answer. Once per cursor
+        // touch: this branch returns, and the adoption block that precedes it runs on the report
+        // before, so there is exactly one pass through here per finger.
+        [self classifySurfaceForCursorTouch];
+
         [self performMouseEventForGesture:TUCCursorGestureTouchDown];
         return;
     }
@@ -764,22 +1079,30 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
                     [self performMouseEventForGesture:TUCCursorGestureTap];
                 }
             } else {
-                [self performMouseEventForGesture:TUCCursorGestureDrag];
+                // Same distinction as the moved path: a lift that ends a drag the hold armed is
+                // that gesture's last event, not the end of a scroll.
+                [self performMouseEventForGesture:
+                     (self.cursorTouchDidHold && didActuatePress) ? TUCCursorGestureHoldAndDrag
+                                                                  : TUCCursorGestureDrag];
             }
         }
 
         TUCScreen *summaryScreen = [self touchscreenForLocationID:cursorTouch.locationID];
         [self logGesture:[NSString stringWithFormat:
-                          @"touch ended: %.0f ms, moved %.1f mm (zone %.1f), tap=%@ held=%@ menu=%@ pressed=%@%@",
+                          @"touch ended: %.0f ms, moved %.1f mm (zone %.1f), tap=%@ held=%@ menu=%@ pressed=%@%@ surface=%@(%@)",
                           ([NSDate timeIntervalSinceReferenceDate] - self.cursorTouchBeganTime) * 1000.0,
                           summaryScreen ? [summaryScreen millimetreDistanceBetweenRelativePoint:cursorTouch.location
                                                                                             and:self.cursorTouchOrigin] : -1,
-                          self.tapTolerance,
+                          // The tolerance that actually applied, which on a control or a title bar is
+                          // tighter than the setting.
+                          [self effectiveTapTolerance],
                           self.cursorTouchQualifiedForTap ? @"Y" : @"n",
                           self.cursorTouchDidHold ? @"Y" : @"n",
                           self.cursorTouchDidActuateLongPress ? @"Y" : @"n",
                           didActuatePress ? @"Y" : @"n",
-                          wasMultitouchGesture ? @" multitouch" : @""]];
+                          wasMultitouchGesture ? @" multitouch" : @"",
+                          TUCNameForSurface(self.cursorTouchSurface),
+                          TUCNameForSurfaceState(self.cursorTouchSurfaceState)]];
 
         [self stopCurrentGesture];
 
@@ -797,6 +1120,14 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
         // reached the hold duration the long press fired, so a short tap produced its click and
         // then a context menu a fraction of a second later, with no finger anywhere near the glass.
         self.cursorTouch = nil;
+
+        // The question this finger asked no longer has anybody to answer to. Bumping here rather than
+        // waiting for the next finger means a probe still in flight discovers it is unwanted the
+        // moment its turn comes, and gives up without troubling another application at all.
+        self.surfaceProbeGeneration++;
+        if (self.classifiesSurfaces) {
+            [TUCSurfaceProbe noteCurrentGeneration:self.surfaceProbeGeneration];
+        }
 
         // Only while the pointer is hidden. Moving a pointer the user can see, just after they
         // touched somewhere, would be its own kind of wrong.
@@ -853,14 +1184,24 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
         return;
     }
 
+    // A hold that took the button down has already committed this touch to a drag, so the slop
+    // below has nothing left to protect: there is no tap left to preserve, and swallowing the
+    // first couple of millimetres would start a text selection in the wrong place.
+    BOOL isCommittedToDrag = self.cursorTouchDidHold && self.cursorTouchDidActuatePress;
+
     // Still inside the tap slop: the finger has not travelled far enough to mean anything
     // but a tap yet. Committing to a scroll or a drag here would emit a few pixels of stray
     // movement on every tap — exactly the noise the slop radius exists to absorb.
-    if (self.cursorTouchQualifiedForTap) {
+    if (self.cursorTouchQualifiedForTap && !isCommittedToDrag) {
         return;
     }
 
-    [self performMouseEventForGesture:TUCCursorGestureDrag];
+    // Holding and then moving is a different gesture from moving straight away, and this is the
+    // only place either is emitted. Without the distinction a hold that armed a drag would arrive
+    // as a plain `Drag` and be mapped to a scroll, so the button would be down and scroll events
+    // would be posted through it.
+    [self performMouseEventForGesture:isCommittedToDrag ? TUCCursorGestureHoldAndDrag
+                                                       : TUCCursorGestureDrag];
 }
 
 
@@ -1080,7 +1421,13 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     
     TUCCursorUtilities *utils = [TUCCursorUtilities sharedInstance];
     
-    TUCCursorAction action = [self actionForGesture:gesture];
+    TUCCursorAction action = [self actionForGesture:gesture atScreenLocation:screenLocation];
+
+    // Anything past the touch landing has consequences a late answer must not be allowed to revise.
+    // `TouchDown` is exempt because it only moves the pointer, which the next report would do anyway.
+    if (gesture != TUCCursorGestureTouchDown) {
+        self.cursorTouchSurfaceIsFrozen = YES;
+    }
 
     CGFloat doubleClickSpan = self.doubleClickTolerance * [[self touchscreenForLocationID:touch.locationID] pixelsPerMM];
     [[TUCCursorUtilities sharedInstance] setDoubleClickTolerance:doubleClickSpan];
@@ -1116,6 +1463,24 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
             break;
             
         case TUCCursorActionDrag:
+            // On a control, put the button down where the finger landed before moving it.
+            //
+            // `dragCursorTo:phase:` presses at wherever it is first called, which is the first report
+            // that registered movement — by then already off the slider thumb by however far the
+            // finger travelled to prove it was moving. The slider jumps that far the instant it is
+            // grabbed. Invisible on a scroll bar or a stepper, obvious on a slider, which is the one
+            // control a user watches while dragging it.
+            // Asked of the button itself rather than of `cursorTouchDidActuatePress`, which is
+            // latched from this same state one report later and so would still read NO here.
+            if (!utils.isLeftMouseDown
+                && self.cursorTouchSurface == TUCSurfaceKindControl
+                && touch.phase != NSTouchPhaseEnded) {
+
+                CGPoint origin = [self convertScreenPointRelativeToAbsolute:self.cursorTouchOrigin
+                                                                locationID:touch.locationID];
+                [utils dragCursorTo:origin phase:NSTouchPhaseBegan];
+            }
+
             [utils dragCursorTo:screenLocation phase:touch.phase];
             break;
             
@@ -1169,19 +1534,77 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     // and would swamp the record; everything else here is a decision worth seeing.
     if (gesture != TUCCursorGestureTouchDown) {
         BOOL isClick = (action == TUCCursorActionClick || action == TUCCursorActionPointAndClick);
-        [self logGesture:[NSString stringWithFormat:@"  %@ -> %@%@",
+        [self logGesture:[NSString stringWithFormat:@"  %@ -> %@%@%@",
                           TUCNameForGesture(gesture), TUCNameForAction(action),
-                          isClick ? [NSString stringWithFormat:@" as click state %ld", (long)utils.lastClickCount] : @""]];
+                          isClick ? [NSString stringWithFormat:@" as click state %ld", (long)utils.lastClickCount] : @"",
+                          // The reason on the same line as the decision. Without it, "it drags
+                          // sometimes and scrolls other times on the same control" has no
+                          // explanation anywhere in the record.
+                          self.cursorTouchSurfaceState == TUCSurfaceStateNone
+                              ? @""
+                              : [NSString stringWithFormat:@" [%@/%@]",
+                                 TUCNameForSurface(self.cursorTouchSurface),
+                                 TUCNameForSurfaceSource(self.cursorTouchSurfaceSource)]]];
     }
 }
 
 
+/**
+ The circumstances of whatever gesture is being decided right now.
+
+ Built from the cursor touch, so it is only meaningful while one is down. Cheap enough to make on
+ every decision — it copies six scalars — which is why there is no attempt to cache it.
+ */
+- (TUCGestureContext *)gestureContextAtScreenLocation:(CGPoint)screenLocation {
+    TUCTouch *touch = self.cursorTouch;
+    uint32_t locationID = touch ? touch.locationID : self.locationIDOfLastTouch;
+
+    return [[TUCGestureContext alloc] initWithSurface:self.cursorTouchSurface
+                                              source:self.cursorTouchSurfaceSource
+                                               state:self.cursorTouchSurfaceState
+                                       digitizerKind:[self digitizerKindForLocationID:locationID]
+                                          locationID:locationID
+                                      screenLocation:screenLocation
+                                             didHold:self.cursorTouchDidHold];
+}
+
+
+/// Convenience for the callers that have not already converted the touch's position — currently only
+/// the long-press veto in `-updateHoldState`, which runs once per touch rather than once per report.
 - (TUCCursorAction)actionForGesture:(TUCCursorGesture)gesture {
-    
+    TUCTouch *touch = self.cursorTouch;
+    CGPoint screenLocation = touch
+        ? [self convertScreenPointRelativeToAbsolute:touch.location locationID:touch.locationID]
+        : CGPointZero;
+
+    return [self actionForGesture:gesture atScreenLocation:screenLocation];
+}
+
+
+/**
+ What a gesture should do, asked of the delegate.
+
+ Takes the position rather than working it out, because `-performMouseEventForGesture:` has already
+ converted it and that method runs on every report of a drag or a scroll. Converting it twice there
+ would mean a second delegate round trip per report, in the one path where per-report cost is the
+ thing this file is most careful about.
+ */
+- (TUCCursorAction)actionForGesture:(TUCCursorGesture)gesture atScreenLocation:(CGPoint)screenLocation {
+
+    // The richer question first, and only one of the two is ever asked. A delegate that answers it
+    // has taken over the mapping entirely; falling through to `-actionForGesture:` as well would
+    // mean two answers to the same question with no rule about which wins.
+    if ([self.delegate respondsToSelector:@selector(actionForGesture:inContext:)]) {
+        return [self.delegate actionForGesture:gesture
+                                    inContext:[self gestureContextAtScreenLocation:screenLocation]];
+    }
+
+    // The original contract, unchanged. `TouchUpCore` ships as a framework, so this is somebody
+    // else's code as far as this file is concerned.
     if (self.delegate != nil) {
         return [self.delegate actionForGesture:gesture];
     }
-    
+
     switch(gesture) {
         case TUCCursorGestureTouchDown:         return TUCCursorActionMoveClickIfNeeded;
         case TUCCursorGestureTap:               return TUCCursorActionClick;
@@ -1435,6 +1858,148 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
 
 
 /**
+ The frontmost ordinary window under `point`, as the window list sees it: who owns it, what it is
+ called, where it is, and whether it sits behind the active application's topmost window. Returns NO
+ when the point is over nothing but the desktop.
+
+ Returns what it found rather than a verdict, because the two callers need this same walk and
+ opposite conclusions from it. Raising cares only about a window *behind* the active one; classifying
+ what was touched cares very much about the one in front.
+
+ System chrome — the Dock, Control Center — is skipped rather than returned, which is what the raise
+ decision needs. `outFrontmostHitIsChrome` reports that it was passed over anyway, since a finger on
+ the Dock has touched something even though there is nothing there to raise.
+ */
+- (BOOL)findWindowUnderPoint:(CGPoint)point
+                       owner:(pid_t *)outOwner
+                      bounds:(CGRect *)outBounds
+                   ownerName:(NSString * __autoreleasing *)outOwnerName
+     isBehindFrontmostWindow:(BOOL *)outIsBehind
+        frontmostHitIsChrome:(BOOL *)outFrontmostHitIsChrome {
+
+    pid_t frontmostPID = [[[NSWorkspace sharedWorkspace] frontmostApplication] processIdentifier];
+
+    CFArrayRef array = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly|kCGWindowListExcludeDesktopElements, kCGNullWindowID);
+
+    // The window list is ordered front-to-back by window *level* (not grouped by app), so
+    // high-level overlays — including our own screenSaver-level panels — come before the
+    // active app's normal windows. `behindFrontmostWindow` flips once we pass the active
+    // app's topmost window: windows seen before it are stacked above it, windows after are
+    // behind it.
+    BOOL behindFrontmostWindow = NO;
+    BOOL didHitChrome = NO;
+    BOOL found = NO;
+
+    if (outFrontmostHitIsChrome) *outFrontmostHitIsChrome = NO;
+
+    for (CFIndex i = 0; i < CFArrayGetCount(array); i++) {
+        CFDictionaryRef dic = CFArrayGetValueAtIndex(array, i);
+
+        CFNumberRef numPid = CFDictionaryGetValue(dic, kCGWindowOwnerPID);
+        pid_t currPID;
+        CFNumberGetValue(numPid, kCFNumberIntType, &currPID);
+        BOOL isFrontmostApp = currPID == frontmostPID;
+
+        CFDictionaryRef bounds = CFDictionaryGetValue(dic, kCGWindowBounds);
+        CGRect nextFrame;
+        CGRectMakeWithDictionaryRepresentation(bounds, &nextFrame);
+        BOOL isInside = CGRectContainsPoint(nextFrame, point);
+
+        if (isFrontmostApp && !behindFrontmostWindow) {
+            behindFrontmostWindow = YES;
+        }
+
+        if (!isInside) continue;
+
+        NSString *ownerName = (__bridge NSString *)CFDictionaryGetValue(dic, kCGWindowOwnerName);
+        if ([self isSystemChromeOwner:currPID name:ownerName]) {
+            // Only the topmost thing under the finger describes what was touched. Chrome behind a
+            // window is chrome the user cannot reach.
+            if (!didHitChrome && outFrontmostHitIsChrome) *outFrontmostHitIsChrome = YES;
+            didHitChrome = YES;
+            continue;
+        }
+
+        // First real window under the point = the one the finger actually hits.
+        if (outOwner)     *outOwner = currPID;
+        if (outBounds)    *outBounds = nextFrame;
+        if (outOwnerName) *outOwnerName = ownerName;
+        if (outIsBehind)  *outIsBehind = behindFrontmostWindow && !isFrontmostApp;
+        found = YES;
+        break;
+    }
+
+    CFRelease(array);
+    return found;
+}
+
+
+/**
+ How far (points) below a window's top edge still counts as its title bar, when geometry is all there
+ is to go on. A standard title bar is 28 points tall; a window with a unified toolbar is taller, and
+ guessing tall there would claim content.
+ */
+static const CGFloat kTitleBarProbeHeight = 28.0;
+
+
+/**
+ What the window list alone can honestly say about `point`.
+
+ Certain about two things and deliberately silent about everything else. It knows where windows are,
+ so it knows when there is no window at all — which is the desktop, and is worth having for free,
+ since dragging on the desktop should select rather than scroll. It knows who owns them, so it knows
+ the Dock and the menu bar. Anything *inside* a window it cannot see at all, and returns
+ `TUCSurfaceKindUnknown` rather than guessing `Content`: a slider and a paragraph look identical from
+ here, and the mapping has to be able to tell "there is nothing special here" from "I could not see".
+
+ The title bar is the one guess it does make, from geometry, and it is marked as coming from the
+ window list precisely so the mapping can refuse to start a drag on it. A full-screen game is a
+ window with no accessibility support and no title bar, and its top 28 points are not a handle.
+ */
+- (TUCSurfaceKind)windowSurfaceForPoint:(CGPoint)point locationID:(uint32_t)locationID {
+
+    if ([self isPointInMenuBar:point locationID:locationID]) {
+        return TUCSurfaceKindWindowChrome;
+    }
+
+    CGRect bounds = CGRectZero;
+    BOOL hitIsChrome = NO;
+
+    BOOL found = [self findWindowUnderPoint:point
+                                     owner:NULL
+                                    bounds:&bounds
+                                 ownerName:NULL
+                   isBehindFrontmostWindow:NULL
+                      frontmostHitIsChrome:&hitIsChrome];
+
+    // Checked before `found`, because chrome sitting in front of a window is what the finger
+    // actually reached.
+    if (hitIsChrome) {
+        return TUCSurfaceKindWindowChrome;
+    }
+
+    // Nothing at all under the point. `kCGWindowListExcludeDesktopElements` keeps the desktop's own
+    // Finder window out of the list, which is what makes this reliable rather than a guess.
+    if (!found) {
+        return TUCSurfaceKindDesktop;
+    }
+
+    // A window filling its whole display has no title bar to grab — it is full-screen, and on a
+    // game that is also the one case where nothing else here can be read. Claiming a handle across
+    // the top of it would turn an ordinary swipe into a window drag.
+    CGRect screenBounds = [self absoluteBoundsForLocationID:locationID];
+    BOOL isFullScreen = !CGRectIsEmpty(screenBounds)
+        && CGRectContainsRect(bounds, CGRectInset(screenBounds, 1, 1));
+
+    if (!isFullScreen && point.y < CGRectGetMinY(bounds) + kTitleBarProbeHeight) {
+        return TUCSurfaceKindWindowChrome;
+    }
+
+    return TUCSurfaceKindUnknown;
+}
+
+
+/**
  The process owning the window under `point`, when that window sits behind the active app's and a
  tap there ought to bring it forward. Zero when nothing needs raising.
 
@@ -1459,51 +2024,19 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
         return 0;
     }
 
-    pid_t frontmostPID = [[[NSWorkspace sharedWorkspace] frontmostApplication] processIdentifier];
+    pid_t owner = 0;
+    BOOL isBehind = NO;
 
-    CFArrayRef array = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly|kCGWindowListExcludeDesktopElements, kCGNullWindowID);
-
-    // The window list is ordered front-to-back by window *level* (not grouped by app), so
-    // high-level overlays — including our own screenSaver-level panels — come before the
-    // active app's normal windows. `behindFrontmostWindow` flips once we pass the active
-    // app's topmost window: windows seen before it are stacked above it, windows after are
-    // behind it.
-    BOOL behindFrontmostWindow = NO;
-    pid_t result = 0;
-
-    for (CFIndex i = 0; i < CFArrayGetCount(array); i++) {
-        CFDictionaryRef dic = CFArrayGetValueAtIndex(array, i);
-
-        CFNumberRef numPid = CFDictionaryGetValue(dic, kCGWindowOwnerPID);
-        pid_t currPID;
-        CFNumberGetValue(numPid, kCFNumberIntType, &currPID);
-        BOOL isFrontmostApp = currPID == frontmostPID;
-
-        CFDictionaryRef bounds = CFDictionaryGetValue(dic, kCGWindowBounds);
-        CGRect nextFrame;
-        CGRectMakeWithDictionaryRepresentation(bounds, &nextFrame);
-        BOOL isInside = CGRectContainsPoint(nextFrame, point);
-
-        if (isFrontmostApp && !behindFrontmostWindow) {
-            behindFrontmostWindow = YES;
-        }
-
-        if (!isInside) continue;
-
-        NSString *ownerName = (__bridge NSString *)CFDictionaryGetValue(dic, kCGWindowOwnerName);
-        if ([self isSystemChromeOwner:currPID name:ownerName]) {
-            continue;
-        }
-
-        // First real window under the point = the one the finger actually hits.
-        if (!isFrontmostApp && behindFrontmostWindow) {
-            result = currPID;
-        }
-        break;
+    if (![self findWindowUnderPoint:point
+                              owner:&owner
+                             bounds:NULL
+                          ownerName:NULL
+            isBehindFrontmostWindow:&isBehind
+               frontmostHitIsChrome:NULL]) {
+        return 0;
     }
 
-    CFRelease(array);
-    return result;
+    return isBehind ? owner : 0;
 }
 
 
@@ -1587,6 +2120,10 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
         BOOL flippedV = (self.delegate != nil)
             && [self.delegate digitizerIsFlippedVerticallyForLocationID:locationID];
 
+        [report appendFormat:@"digitizer %#010x   declares itself: %@ (usage %#04x)\n", locationID,
+         TUCNameForDigitizerKind([self digitizerKindForLocationID:locationID]),
+         TouchDeviceHIDPrimaryUsage(locationID)];
+
         [report appendFormat:@"digitizer %#010x   drives pointer: %@\n", locationID,
          TouchDeviceDrivesPointer(locationID) ? @"YES" : @"NO - it will never produce any input"];
 
@@ -1597,6 +2134,18 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
          flippedH ? (flippedV ? @"H+V" : @"H") : (flippedV ? @"V" : @"no")];
     }
 
+    if (self.classifiesSurfaces) {
+        [report appendString:@"\n"];
+        [report appendString:[TUCSurfaceProbe diagnosticsDescription]];
+        [report appendFormat:@"Decisions: %lu answers delivered, %lu in time to be used,\n"
+                              "           %lu arrived for a finger already gone, %lu contradicted a\n"
+                              "           decision already made\n",
+         (unsigned long)self.surfaceReadingsDelivered,
+         (unsigned long)self.surfaceAnswersInTimeCount,
+         (unsigned long)self.surfaceLateAnswerCount,
+         (unsigned long)self.surfaceLateDisagreementCount];
+    }
+
     [report appendString:@"\n───── Parameters ─────\n"];
     [report appendFormat:@"postMouseEvents:      %@\n", self.postMouseEvents ? @"YES" : @"NO"];
     [report appendFormat:@"tapTolerance:         %.2f mm\n", self.tapTolerance];
@@ -1604,6 +2153,7 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     [report appendFormat:@"doubleClickTolerance: %.2f mm\n", self.doubleClickTolerance];
     [report appendFormat:@"errorResistance:      %ld reports\n", (long)self.errorResistance];
     [report appendFormat:@"ignoreOriginTouches:  %@\n", self.ignoreOriginTouches ? @"YES" : @"NO"];
+    [report appendFormat:@"classifiesSurfaces:   %@\n", self.classifiesSurfaces ? @"YES" : @"NO"];
     [report appendFormat:@"hidesCursor:          %@%@\n",
      self.hidesCursor ? @"YES" : @"NO",
      self.hidesCursor && ![[TUCCursorUtilities sharedInstance] canHideCursorSystemWide]

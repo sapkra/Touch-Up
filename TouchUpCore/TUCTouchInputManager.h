@@ -85,6 +85,16 @@ NS_ASSUME_NONNULL_BEGIN
 
 
 /**
+ What the digitizer's HID descriptor claims it is, or `TUCDigitizerKindUnknown` if nothing is
+ registered for that location ID.
+
+ Discovered, never configured: there is no setter, because a device's descriptor is not the user's
+ to disagree with. The one decision they do get is `-setDigitizerDrivesPointer:forLocationID:`.
+ */
+- (TUCDigitizerKind)digitizerKindForLocationID:(uint32_t)locationID;
+
+
+/**
  Hides the mouse pointer, so touching the glass feels direct rather than like steering a mouse
  from a distance. There is no pointer on a tablet.
 
@@ -99,6 +109,21 @@ NS_ASSUME_NONNULL_BEGIN
  */
 @property (nonatomic) BOOL hidesCursor;
 
+
+
+/**
+ Whether to work out what each finger landed on, so a gesture can mean different things in different
+ places. Default is NO.
+
+ A capability rather than a mapping: it decides whether the question is asked at all, and
+ `-actionForGesture:inContext:` decides what to do with the answer. With this off nothing is asked,
+ which is the point — the cheap half of the classification is a window-server round trip, and paying
+ for it on every touch would be wrong for anybody not using the result.
+
+ Answers are never waited for. A gesture that has to be decided before one arrives is decided
+ without it, so this changes what is *known*, never when anything happens.
+ */
+@property (nonatomic) BOOL classifiesSurfaces;
 
 
 /**

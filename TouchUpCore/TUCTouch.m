@@ -7,6 +7,31 @@
 
 #import "TUCTouch.h"
 
+
+@implementation TUCGestureContext
+
+- (instancetype)initWithSurface:(TUCSurfaceKind)surface
+                         source:(TUCSurfaceSource)source
+                          state:(TUCSurfaceState)state
+                  digitizerKind:(TUCDigitizerKind)digitizerKind
+                     locationID:(uint32_t)locationID
+                 screenLocation:(CGPoint)screenLocation
+                        didHold:(BOOL)didHold {
+    if (self = [super init]) {
+        _surface = surface;
+        _surfaceSource = source;
+        _surfaceState = state;
+        _digitizerKind = digitizerKind;
+        _locationID = locationID;
+        _screenLocation = screenLocation;
+        _didHold = didHold;
+    }
+    return self;
+}
+
+@end
+
+
 @implementation TUCTouch
 
 - (instancetype)initWithContactID:(NSInteger)contactID locationID:(uint32_t)locationID {

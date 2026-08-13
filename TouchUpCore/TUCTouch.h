@@ -50,6 +50,144 @@ typedef NS_ENUM(NSUInteger, TUCCursorAction) {
 
 
 
+/**
+ What a digitizer's HID descriptor claims it is.
+
+ Worth distinguishing from "may it drive the pointer", which is one bit derived from this plus the
+ user's decision. A panel that only admits to being a `Digitizer`, or claims to be a `TouchPad`, is
+ the usual reason a screen does nothing on plugging in — and it is also a reason to be less willing
+ to read a gesture as direct manipulation of whatever is under it, since a device that is not a
+ screen has nothing under it.
+ */
+typedef NS_ENUM(NSUInteger, TUCDigitizerKind) {
+    /// Nothing is registered for that location ID, or its descriptor would not say.
+    TUCDigitizerKindUnknown = 0,
+    TUCDigitizerKindTouchScreen,
+    TUCDigitizerKindTouchPad,
+    /// Declares itself a digitizer without saying which sort.
+    TUCDigitizerKindDigitizer,
+};
+
+
+/**
+ What sort of thing a finger landed on.
+
+ The point of knowing is that one finger cannot mean the same thing everywhere: a flick over a list
+ should scroll it, the same flick over a window's title bar should move the window, and over a slider
+ it should move the slider. Nothing about a touch report says which of those is under the finger, so
+ it has to be asked separately — see `-classifiesSurfaces`.
+ */
+typedef NS_ENUM(NSUInteger, TUCSurfaceKind) {
+    /**
+     Nothing could be established.
+
+     Zero, like `_TUCCursorGestureNone`, so an uninitialised field means "no information" and every
+     default is the cautious one. Deliberately distinct from `TUCSurfaceKindContent`: a failed read
+     is not the same answer as a successful read of something ordinary, and treating it as one would
+     mean an application that is merely busy gets acted on as though it had been understood.
+     */
+    TUCSurfaceKindUnknown = 0,
+
+    /// The desktop, and the icons on it. Dragging here selects or moves; it never scrolls.
+    TUCSurfaceKindDesktop,
+
+    /// Title bars, toolbars, the Dock, the menu bar. Dragging moves the thing itself.
+    TUCSurfaceKindWindowChrome,
+
+    /// A web page, a list, a document — something whose content moves under a flick.
+    TUCSurfaceKindScrollArea,
+
+    /// A slider, a scroll bar, a stepper. Follows the finger from the first movement, and must
+    /// never be scrolled: scrolling a slider does nothing at all.
+    TUCSurfaceKindControl,
+
+    /// Somewhere text can be typed and selected.
+    TUCSurfaceKindTextArea,
+
+    /// Read successfully, and it is none of the above — a plain window interior.
+    TUCSurfaceKindContent,
+};
+
+
+/// How much a `TUCSurfaceKind` is worth, which is not the same question as what it says.
+typedef NS_ENUM(NSUInteger, TUCSurfaceSource) {
+    TUCSurfaceSourceNone = 0,
+
+    /**
+     Established from window ownership and geometry alone.
+
+     Certain about where windows are and who owns them, and guessing about anything inside one. A
+     window with no accessibility support looks identical to a full-screen game, so an answer from
+     here may only ever be used to *suppress* something — never to start a drag, which is the one
+     mistake with consequences the user has to undo.
+     */
+    TUCSurfaceSourceWindowList,
+
+    /// The element under the finger answered for itself.
+    TUCSurfaceSourceAXElement,
+};
+
+
+/// Whether the surface is known yet, and whether waiting would help.
+typedef NS_ENUM(NSUInteger, TUCSurfaceState) {
+    /// Not asked, or not wanted.
+    TUCSurfaceStateNone = 0,
+    /// Asked; the answer has not arrived. It may still arrive, or it may not.
+    TUCSurfaceStatePending,
+    /// Answered.
+    TUCSurfaceStateKnown,
+    /// Asked, and no answer is possible — nothing there can be read. Waiting is pointless.
+    TUCSurfaceStateUnavailable,
+};
+
+
+/**
+ Everything known about the circumstances of a gesture, beyond the gesture itself.
+
+ An object rather than more selector parameters because this is the third time deciding what a
+ gesture should do has turned out to need something `-actionForGesture:` does not carry — first
+ which digitizer, then what is under the finger, then what sort of device it came from. Each of
+ those as its own selector would be another `respondsToSelector:` branch that never goes away; as a
+ property on one object, the next of them costs nothing.
+
+ Immutable, and safe to hold: it copies what it was told rather than referring to a live touch.
+ */
+@interface TUCGestureContext : NSObject
+
+/// What the finger is on, as far as anything could tell.
+@property (readonly) TUCSurfaceKind surface;
+
+/// How `surface` was arrived at. Check this before acting on anything irreversible.
+@property (readonly) TUCSurfaceSource surfaceSource;
+
+/// Whether an answer is still coming. `Pending` means the mapping should fall back rather than wait.
+@property (readonly) TUCSurfaceState surfaceState;
+
+/// What the digitizer says it is.
+@property (readonly) TUCDigitizerKind digitizerKind;
+
+/// Which digitizer the finger is on.
+@property (readonly) uint32_t locationID;
+
+/// Where the finger is, in global top-left-origin points — the space `CGEvent` uses.
+@property (readonly) CGPoint screenLocation;
+
+/// Whether this touch had already been held still long enough to count as a hold.
+@property (readonly) BOOL didHold;
+
+- (instancetype)initWithSurface:(TUCSurfaceKind)surface
+                         source:(TUCSurfaceSource)source
+                          state:(TUCSurfaceState)state
+                  digitizerKind:(TUCDigitizerKind)digitizerKind
+                     locationID:(uint32_t)locationID
+                 screenLocation:(CGPoint)screenLocation
+                        didHold:(BOOL)didHold NS_DESIGNATED_INITIALIZER;
+
+- (instancetype)init NS_UNAVAILABLE;
+
+@end
+
+
 @interface TUCTouch : NSObject
 
 @property (strong) NSUUID *uuid;

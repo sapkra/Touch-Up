@@ -9,6 +9,8 @@
 /* Begin PBXBuildFile section */
 		701C965329C9E51500CA833C /* TUCScreen.h in Headers */ = {isa = PBXBuildFile; fileRef = 701C965129C9E51500CA833C /* TUCScreen.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		701C965429C9E51500CA833C /* TUCScreen.m in Sources */ = {isa = PBXBuildFile; fileRef = 701C965229C9E51500CA833C /* TUCScreen.m */; };
+		7A5F10032D00000100CA833C /* TUCSurfaceProbe.h in Headers */ = {isa = PBXBuildFile; fileRef = 7A5F10012D00000100CA833C /* TUCSurfaceProbe.h */; };
+		7A5F10042D00000100CA833C /* TUCSurfaceProbe.m in Sources */ = {isa = PBXBuildFile; fileRef = 7A5F10022D00000100CA833C /* TUCSurfaceProbe.m */; };
 		702F2BA7298D448D00415DEA /* TUCTouch.h in Headers */ = {isa = PBXBuildFile; fileRef = 702F2BA5298D448D00415DEA /* TUCTouch.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		702F2BA8298D448D00415DEA /* TUCTouch.m in Sources */ = {isa = PBXBuildFile; fileRef = 702F2BA6298D448D00415DEA /* TUCTouch.m */; };
 		702F2BAA298D57BD00415DEA /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 702F2BA9298D57BD00415DEA /* SettingsView.swift */; };
@@ -69,6 +71,8 @@
 /* Begin PBXFileReference section */
 		701C965129C9E51500CA833C /* TUCScreen.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TUCScreen.h; sourceTree = "<group>"; };
 		701C965229C9E51500CA833C /* TUCScreen.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TUCScreen.m; sourceTree = "<group>"; };
+		7A5F10012D00000100CA833C /* TUCSurfaceProbe.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TUCSurfaceProbe.h; sourceTree = "<group>"; };
+		7A5F10022D00000100CA833C /* TUCSurfaceProbe.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TUCSurfaceProbe.m; sourceTree = "<group>"; };
 		702F2BA5298D448D00415DEA /* TUCTouch.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TUCTouch.h; sourceTree = "<group>"; };
 		702F2BA6298D448D00415DEA /* TUCTouch.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TUCTouch.m; sourceTree = "<group>"; };
 		702F2BA9298D57BD00415DEA /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
@@ -170,6 +174,8 @@
 				7052F443298D2DAB0066014F /* TouchUpCore.h */,
 				701C965129C9E51500CA833C /* TUCScreen.h */,
 				701C965229C9E51500CA833C /* TUCScreen.m */,
+				7A5F10012D00000100CA833C /* TUCSurfaceProbe.h */,
+				7A5F10022D00000100CA833C /* TUCSurfaceProbe.m */,
 				704B2C6A2997B5A000A1DE4D /* TUCCursorUtilities.h */,
 				704B2C6B2997B5A000A1DE4D /* TUCCursorUtilities.m */,
 				702F2BA5298D448D00415DEA /* TUCTouch.h */,
@@ -199,6 +205,7 @@
 				704B2C6C2997B5A000A1DE4D /* TUCCursorUtilities.h in Headers */,
 				7052F444298D2DAB0066014F /* TouchUpCore.h in Headers */,
 				701C965329C9E51500CA833C /* TUCScreen.h in Headers */,
+				7A5F10032D00000100CA833C /* TUCSurfaceProbe.h in Headers */,
 				7052F455298D30D10066014F /* HIDInterpreter.h in Headers */,
 				7052F459298D3A450066014F /* TUCTouchInputManager.h in Headers */,
 				70AB105B2FE0A10000AB105B /* TUCKeyboardTyper.h in Headers */,
@@ -328,6 +335,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				701C965429C9E51500CA833C /* TUCScreen.m in Sources */,
+				7A5F10042D00000100CA833C /* TUCSurfaceProbe.m in Sources */,
 				704B2C6D2997B5A000A1DE4D /* TUCCursorUtilities.m in Sources */,
 				70AB106B2FE0A10000AB106B /* TUCKeyboardTyper.m in Sources */,
 				7052F456298D30D10066014F /* HIDInterpreter.c in Sources */,

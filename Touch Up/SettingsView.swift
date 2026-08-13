@@ -121,6 +121,22 @@ struct SettingsView: View {
     }
     
     
+    /// Its own section for the same reason the keyboard has one: the Gestures group is one child away
+    /// from the ten a `ViewBuilder` will take, and adding an eleventh breaks in a way that reads as
+    /// unrelated to whatever was being added.
+    ///
+    /// It also belongs apart on its own merits. Everything under Gestures answers "what should this
+    /// gesture do"; this answers "should that depend on where you did it", which is a question about
+    /// all of them at once.
+    var surfaceSettings: some View {
+        Group {
+            Toggle(isOn: $model.isSurfaceAwareGesturesEnabled) {
+                SettingsExplanationLabel(labels: model.uiLabels(for: \.isSurfaceAwareGesturesEnabled))
+            }
+        }
+    }
+
+
     /// Its own section rather than another row under Gestures: a keyboard is not a gesture, and that
     /// group is one child away from the ten a `ViewBuilder` will take.
     var keyboardSettings: some View {
@@ -264,6 +280,10 @@ struct SettingsView: View {
                     gestureSettings
                 }
 
+                Section("Surfaces") {
+                    surfaceSettings
+                }
+
                 Section("Keyboard") {
                     keyboardSettings
                 }
@@ -297,6 +317,10 @@ struct SettingsView: View {
 
                 LegacySection(title: "Gestures") {
                     gestureSettings
+                }
+
+                LegacySection(title: "Surfaces") {
+                    surfaceSettings
                 }
 
                 LegacySection(title: "Keyboard") {

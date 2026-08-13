@@ -29,6 +29,14 @@ void SetTouchDeviceDrivesPointer(uint32_t locationID, bool drivesPointer);
 
 bool TouchDeviceDrivesPointer(uint32_t locationID);
 
+/// What the interface's descriptor called it — `kHIDUsage_Dig_TouchScreen` (0x04),
+/// `kHIDUsage_Dig_TouchPad` (0x05), `kHIDUsage_Dig_Digitizer` (0x01) — or 0 if it would not say or
+/// no such interface is registered.
+///
+/// A raw HID usage rather than a cooked enum on purpose: the interpreter's job is to report what the
+/// descriptor said, and the layers above are free to disagree about what it means.
+uint32_t TouchDeviceHIDPrimaryUsage(uint32_t locationID);
+
 /// Everything the interpreter has discovered about the connected devices: the HID element
 /// tree, which interface was accepted for each screen and why, and any errors along the way.
 /// Owned by the interpreter and valid until the next device event — copy it, don't retain it.

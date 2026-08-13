@@ -60,6 +60,29 @@ NS_ASSUME_NONNULL_BEGIN
 @optional
 
 /**
+ The same question as `-actionForGesture:`, with the circumstances the gesture happened in.
+
+ Implement this instead of `-actionForGesture:` to let a gesture mean different things in different
+ places — a flick scrolling a list but moving a window by its title bar, a hold selecting text rather
+ than opening a menu. Implementing it replaces `-actionForGesture:` entirely; the manager calls
+ whichever is available and never both.
+
+ Two things to know before branching on `context.surface`.
+
+ It is only ever about one finger. A two-finger gesture, or a three-finger sweep, is a gesture of the
+ hand and means the same thing wherever it happens: two fingers on a slider still mean scroll. The
+ context is supplied for those gestures anyway, so nothing has to be special-cased here, but reading
+ it is almost certainly a mistake.
+
+ And it may not be known yet. `context.surfaceState` is `Pending` when a gesture had to be decided
+ before an answer arrived, which is a normal outcome rather than an error — the finger has already
+ moved and the decision cannot wait. Fall back to whatever the gesture means without the surface;
+ do not stall.
+ */
+- (TUCCursorAction)actionForGesture:(TUCCursorGesture)gesture
+                          inContext:(TUCGestureContext *)context;
+
+/**
  A finger landed on a different digitizer than the one before it.
 
  For interface that should be on the panel the user is actually using. Sent only when the panel

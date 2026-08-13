@@ -53,6 +53,11 @@ typedef struct {
     /// Whether this interface is allowed to move the pointer. Touches are always read and
     /// published (so the device is visible and testable); this gates only the mouse events.
     Boolean                 drivesPointer;
+
+    /// What the descriptor called this interface: `kHIDUsage_Dig_TouchScreen`, `…_TouchPad`, or a
+    /// bare `…_Digitizer`. Kept rather than only the boolean it feeds, because "why is this device
+    /// inert?" is the most common question a bug report asks, and the answer is almost always this.
+    uint32_t                primaryUsage;
 } HIDDeviceState;
 
 static HIDDeviceState gDevices[kMaxTouchscreens];
@@ -820,6 +825,12 @@ bool TouchDeviceDrivesPointer(uint32_t locationID) {
 }
 
 
+uint32_t TouchDeviceHIDPrimaryUsage(uint32_t locationID) {
+    HIDDeviceState *device = RegisteredDeviceForLocationID(locationID);
+    return device ? device->primaryUsage : 0;
+}
+
+
 void SetTouchDevicesSeized(bool seize) {
     gSeizeTouchDevices = seize;
     for (int i = 0; i < gDeviceCount; i++) {
@@ -971,16 +982,31 @@ static Boolean IsExcludedDevice(IOHIDDeviceRef dev) {
  being a TouchPad is indistinguishable from one that really is a trackpad, and guessing wrong
  in that direction hijacks a working pointing device.
  */
-static Boolean ShouldDriveDeviceByDefault(IOHIDDeviceRef dev) {
+/**
+ What the interface calls itself, or 0 if it would not say.
+
+ Split out from `ShouldDriveDeviceByDefault`, which read this and then threw everything but one
+ comparison away. The distinction between a panel that declares itself a TouchScreen, one that
+ claims to be a TouchPad, and one that only admits to being a Digitizer is the difference between
+ a device that works on plugging in and one that sits there doing nothing until the user finds the
+ switch — so it belongs in the diagnostics, and it lets a gesture be read differently on a device
+ that may not be a screen at all.
+ */
+static uint32_t DevicePrimaryUsage(IOHIDDeviceRef dev) {
     CFTypeRef usage = IOHIDDeviceGetProperty(dev, CFSTR(kIOHIDPrimaryUsageKey));
     long primaryUsage = 0;
 
     if (usage && CFGetTypeID(usage) == CFNumberGetTypeID()
         && CFNumberGetValue((CFNumberRef)usage, kCFNumberLongType, &primaryUsage)) {
-        return primaryUsage == kHIDUsage_Dig_TouchScreen;
+        return (uint32_t)primaryUsage;
     }
 
-    return false;
+    return 0;
+}
+
+
+static Boolean ShouldDriveDeviceByDefault(IOHIDDeviceRef dev) {
+    return DevicePrimaryUsage(dev) == kHIDUsage_Dig_TouchScreen;
 }
 
 
@@ -1045,6 +1071,7 @@ static void Handle_DeviceMatchingCallback(
         HIDDeviceState *registered = RegisterTouchDevice(inIOHIDDeviceRef, locationID, contactCount);
         if (registered) {
             registered->drivesPointer = driveByDefault;
+            registered->primaryUsage = DevicePrimaryUsage(inIOHIDDeviceRef);
             TouchInputManagerDidConnectTouchscreen(gTouchManager, locationID, driveByDefault);
         } else {
             DiagLog("  -> FAILED to allocate device state; interface not driven\n");
@@ -1064,6 +1091,11 @@ static void Handle_DeviceMatchingCallback(
         HIDDeviceState *replacement = RegisterTouchDevice(inIOHIDDeviceRef, locationID, contactCount);
         if (replacement) {
             replacement->drivesPointer = drivesPointer;
+            // Read from the interface we are switching *to*, not carried over: it is a different
+            // interface of the same device and may well describe itself differently. Forgetting it
+            // here is how the device kind would end up Unknown on a combo digitizer, and only
+            // sometimes, since connect order is not deterministic.
+            replacement->primaryUsage = DevicePrimaryUsage(inIOHIDDeviceRef);
         }
     } else {
         DiagLog("  -> ignored as a secondary interface of %#010x (%ld <= %ld contact collections)\n",

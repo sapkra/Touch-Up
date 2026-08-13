@@ -38,6 +38,7 @@ class TouchUp: NSObject, ObservableObject {
     @Published var isCursorHiddenEnabled = false
     @Published var twoFingerDragAction: TwoFingerDragAction = .drag
     @Published var isSystemSwipeEnabled = true
+    @Published var isSurfaceAwareGesturesEnabled = false
 
     @Published var isOnScreenKeyboardEnabled = false
     @Published var isKeyboardAutoShowEnabled = false
@@ -147,6 +148,7 @@ class TouchUp: NSObject, ObservableObject {
             && isClickWindowToFrontEnabled
             && isOnScreenKeyboardEnabled
             && isKeyboardAutoShowEnabled
+            && isSurfaceAwareGesturesEnabled
             && holdDuration >= Self.tabletModeHoldDuration
             && tapDistance >= Self.tabletModeTapDistance
     }
@@ -203,6 +205,12 @@ class TouchUp: NSObject, ObservableObject {
         // click, which made that tap actuate twice on some controls; it now activates the owning
         // application instead and leaves exactly one click.
         isClickWindowToFrontEnabled = true
+
+        // One finger scrolling is the premise of the whole mode, and the one thing wrong with it on a
+        // Mac is that one finger then cannot move a window, drag a file out of a folder, or work a
+        // slider — none of which a tablet has this problem with, because a tablet knows what is under
+        // your finger. This is how that is answered.
+        isSurfaceAwareGesturesEnabled = true
 
         holdDuration = Self.tabletModeHoldDuration
         tapDistance = Self.tabletModeTapDistance
@@ -278,6 +286,7 @@ extension TouchUp {
             "isCursorHiddenEnabled" : false,
             "twoFingerDragAction" : TwoFingerDragAction.drag.rawValue,
             "isSystemSwipeEnabled" : true,
+            "isSurfaceAwareGesturesEnabled" : false,
             "areAdditionalDigitizerRotationSettingsVisible" : false,
 
             // Off by default. A machine with a keyboard attached does not want a second one taking up
@@ -316,7 +325,13 @@ extension TouchUp {
             $isExclusiveAccessEnabled.sink { [weak self] enabled in
                 self?.touchManager.setTouchscreensSeized(enabled)
             },
-            $isCursorHiddenEnabled.assign(to: \.hidesCursor, on: touchManager)
+            $isCursorHiddenEnabled.assign(to: \.hidesCursor, on: touchManager),
+            // Pushed rather than pulled per gesture, unlike every other behavioural setting here,
+            // because it is not a mapping: it decides whether the core asks what is under the finger
+            // at all. The same kind of switch as `postMouseEvents` and `hidesCursor`, which are
+            // pushed for the same reason. Left to be pulled, the core would have to run a window
+            // server round trip on every touchdown just to find out nobody wanted the answer.
+            $isSurfaceAwareGesturesEnabled.assign(to: \.classifiesSurfaces, on: touchManager)
         ]
         
         
@@ -332,6 +347,7 @@ extension TouchUp {
         isCursorHiddenEnabled = defaults.bool(forKey: "isCursorHiddenEnabled")
         twoFingerDragAction = TwoFingerDragAction(rawValue: defaults.integer(forKey: "twoFingerDragAction")) ?? .drag
         isSystemSwipeEnabled = defaults.bool(forKey: "isSystemSwipeEnabled")
+        isSurfaceAwareGesturesEnabled = defaults.bool(forKey: "isSurfaceAwareGesturesEnabled")
         areAdditionalDigitizerRotationSettingsVisible = defaults.bool(forKey: "areAdditionalDigitizerRotationSettingsVisible")
         isOnScreenKeyboardEnabled = defaults.bool(forKey: "isOnScreenKeyboardEnabled")
         isKeyboardAutoShowEnabled = defaults.bool(forKey: "isKeyboardAutoShowEnabled")
@@ -369,6 +385,7 @@ extension TouchUp {
         defaults.set(isCursorHiddenEnabled, forKey: "isCursorHiddenEnabled")
         defaults.set(twoFingerDragAction.rawValue, forKey: "twoFingerDragAction")
         defaults.set(isSystemSwipeEnabled, forKey: "isSystemSwipeEnabled")
+        defaults.set(isSurfaceAwareGesturesEnabled, forKey: "isSurfaceAwareGesturesEnabled")
         defaults.set(areAdditionalDigitizerRotationSettingsVisible, forKey: "areAdditionalDigitizerRotationSettingsVisible")
         defaults.set(isOnScreenKeyboardEnabled, forKey: "isOnScreenKeyboardEnabled")
         defaults.set(isKeyboardAutoShowEnabled, forKey: "isKeyboardAutoShowEnabled")
@@ -553,6 +570,99 @@ extension TouchUp: TUCTouchDelegate {
         keyboard.lastTouchedScreenDidChange()
     }
 
+    /// What a gesture should do, given where it happened.
+    ///
+    /// Every branch that does not recognise its surface — and every surface that could not be read —
+    /// defers to `action(for:)` below rather than repeating it. That is the whole of the guarantee
+    /// that turning surface awareness off, or touching an application that cannot be read, behaves
+    /// exactly as it did before this existed: there is no second copy of the mapping to drift.
+    ///
+    /// Only one-finger gestures consult the surface. Two fingers, or three, are a gesture of the hand
+    /// and mean the same thing wherever they land: two fingers on a slider still scroll, and three on
+    /// a title bar still switch desktop. The context is passed for all of them so an integrator can
+    /// do otherwise, but nothing here reads it for them.
+    func action(for gesture: TUCCursorGesture, in context: TUCGestureContext) -> TUCCursorAction {
+        guard isSurfaceAwareGesturesEnabled else { return action(for: gesture) }
+
+        switch gesture {
+        case .TUCCursorGestureDrag:
+            // Point and Click is the exhibit setting: it exists so that nothing on the screen can be
+            // dragged or scrolled by a visitor, and overriding everything is the whole of its job.
+            if isClickOnLiftEnabled { return .pointAndClick }
+            return dragAction(on: context)
+
+        case .TUCCursorGestureLongPress:
+            return longPressAction(on: context)
+
+        default:
+            return action(for: gesture)
+        }
+    }
+
+
+    /// What one finger moving should do on this surface.
+    private func dragAction(on context: TUCGestureContext) -> TUCCursorAction {
+        switch context.surface {
+        case .scrollArea:
+            return .scroll
+
+        case .control:
+            // Scrolling a slider does nothing at all, so this is the one case where falling back to
+            // the global setting is not merely different but useless.
+            return canStartDrag(on: context) ? .drag : action(for: .TUCCursorGestureDrag)
+
+        case .desktop, .windowChrome:
+            return canStartDrag(on: context) ? .drag : action(for: .TUCCursorGestureDrag)
+
+        // Read successfully, and it is nothing in particular — so the setting is the best answer
+        // there is. Kept separate from `.unknown` all the same: one of them is an answer.
+        case .content, .textArea, .unknown:
+            return action(for: .TUCCursorGestureDrag)
+
+        @unknown default:
+            return action(for: .TUCCursorGestureDrag)
+        }
+    }
+
+
+    /// What holding still and then lifting should do on this surface.
+    private func longPressAction(on context: TUCGestureContext) -> TUCCursorAction {
+        switch context.surface {
+        case .textArea:
+            // Hold, then move, selects text — the movement arrives as `HoldAndDrag` and takes the
+            // button with it. Hold, then lift, closes a drag that never moved, which is a click.
+            return .drag
+
+        case .windowChrome, .control:
+            // A menu here would steal the drag the user was starting off the title bar or the thumb.
+            return .none
+
+        default:
+            return action(for: .TUCCursorGestureLongPress)
+        }
+    }
+
+
+    /// Whether this surface has been established well enough to press the mouse button on it.
+    ///
+    /// The asymmetry this protects is the reason the whole mechanism is safe to commit early: a wrong
+    /// scroll costs a few pixels the user scrolls back, while a wrong drag picks up a file, selects
+    /// text, or moves a window — something they have to notice and undo. So a guess about what is
+    /// *inside* a window may only ever suppress scrolling, never start a drag: a window with no
+    /// accessibility support is indistinguishable from a full-screen game, and the top of a game is
+    /// not a handle.
+    ///
+    /// The desktop is the exception, and it is not a guess. It is established by there being no window
+    /// under the finger at all, which the window list knows for certain and without asking anybody —
+    /// and a game is a window, so a game can never be mistaken for it. Requiring an element here would
+    /// mean the desktop could never qualify, because nothing is ever asked about it: dragging a file
+    /// across the desktop would fall back to scrolling the desktop, which does nothing whatsoever.
+    private func canStartDrag(on context: TUCGestureContext) -> Bool {
+        if context.surface == .desktop { return true }
+        return context.surfaceSource == .axElement
+    }
+
+
     func action(for gesture: TUCCursorGesture) -> TUCCursorAction {
         switch gesture {
         case .TUCCursorGestureTouchDown:
@@ -562,10 +672,13 @@ extension TouchUp: TUCTouchDelegate {
             return .click
             
         case .TUCCursorGestureLongPress:
-            // Posted when a finger held still is then lifted without ever moving. On a tablet
-            // that is the gesture for a context menu, which is a secondary click here. Holding
-            // and then moving is a different thing entirely and arrives as `HoldAndDrag`, so
-            // picking something up still works.
+            // Posted as soon as a finger has held still long enough, with the finger still down —
+            // not on the lift. On a tablet that is the gesture for a context menu, which is a
+            // secondary click here.
+            //
+            // Mapping it to `.drag` instead holds the button down for as long as the finger rests
+            // and hands the movement after it to `HoldAndDrag`, which is how text is selected and
+            // how something is picked up.
             return isLongPressContextMenuEnabled ? .secondaryClick : .none
 
         case .TUCCursorGestureDrag:
@@ -675,6 +788,10 @@ extension TouchUp {
         case \.isSystemSwipeEnabled:
             return("Swipe Between Desktops",
                    "Sweep three fingers across the screen to move between desktops, up for Mission Control, or down to see the current app's windows — as on a trackpad. Sent as the keyboard shortcuts macOS assigns to those commands, so the desktop switches in one step rather than following your fingers.")
+
+        case \.isSurfaceAwareGesturesEnabled:
+            return("Notice What You Touch",
+                   "Ask what is under your finger before deciding what a gesture means, the way a tablet does. One finger scrolls a web page, but drags a window by its title bar, moves a file on the desktop, and works a slider directly. Where nothing can be read — an application with no accessibility support, or a full-screen game — the setting above applies exactly as before.")
 
         case \.twoFingerDragAction:
             return("On Two Finger Drag",
