@@ -652,14 +652,24 @@ extension TouchUp: TUCTouchDelegate {
     /// accessibility support is indistinguishable from a full-screen game, and the top of a game is
     /// not a handle.
     ///
-    /// The desktop is the exception, and it is not a guess. It is established by there being no window
-    /// under the finger at all, which the window list knows for certain and without asking anybody —
-    /// and a game is a window, so a game can never be mistaken for it. Requiring an element here would
-    /// mean the desktop could never qualify, because nothing is ever asked about it: dragging a file
-    /// across the desktop would fall back to scrolling the desktop, which does nothing whatsoever.
+    /// Two surfaces are exceptions, and neither is a guess about the inside of a window.
+    ///
+    /// The desktop is established by there being no window under the finger at all, which the window
+    /// list knows for certain without asking anybody — and a game is a window, so a game can never be
+    /// mistaken for it.
+    ///
+    /// Window chrome has to be one too, for a blunter reason: **a title bar has no accessibility
+    /// element in most applications**, so asking for one is asking for something that will never
+    /// arrive. Requiring it meant chrome always fell through to the setting — which in iPad Mode is
+    /// scroll — and windows could not be moved or resized at all, which is exactly what was reported.
+    /// What keeps a full-screen game safe is not this check but the one in
+    /// `-windowSurfaceForPoint:locationID:`, which refuses to claim a handle anywhere on a window
+    /// that fills its display.
     private func canStartDrag(on context: TUCGestureContext) -> Bool {
-        if context.surface == .desktop { return true }
-        return context.surfaceSource == .axElement
+        switch context.surface {
+        case .desktop, .windowChrome: return true
+        default: return context.surfaceSource == .axElement
+        }
     }
 
 

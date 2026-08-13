@@ -717,13 +717,10 @@ static const CGFloat kDirectManipulationTolerance = 1.0;
     switch (self.cursorTouchSurface) {
         case TUCSurfaceKindWindowChrome:
         case TUCSurfaceKindControl:
-            // Only on an answer from the element itself. A title bar guessed from a rectangle is not
-            // worth narrowing the slop for — see `-windowSurfaceForPoint:locationID:` on what a
-            // full-screen game looks like from there.
-            if (self.cursorTouchSurfaceSource == TUCSurfaceSourceAXElement) {
-                return MIN(self.tapTolerance, kDirectManipulationTolerance);
-            }
-            return self.tapTolerance;
+            // Whatever established it. This used to insist on an answer from the element itself,
+            // which a title bar can never provide — so the one surface most in need of a tight slop
+            // was the one that never got it.
+            return MIN(self.tapTolerance, kDirectManipulationTolerance);
 
         default:
             return self.tapTolerance;
@@ -918,6 +915,25 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
 
     // First real answer wins. A second could only be about a different place.
     if (self.cursorTouchSurfaceSource == TUCSurfaceSourceAXElement) {
+        return;
+    }
+
+    // `Content` is the weakest thing a probe can conclude: it means the tree above the finger held
+    // nothing in particular. That is worth having when nothing else is known, and worth nothing
+    // against an answer the window list already gave — so it fills in, and never overwrites.
+    //
+    // On a title bar it is not even a disagreement. Most applications put no element there at all, so
+    // the walk starts at the window itself, matches nothing, reaches the top and reports `Content`;
+    // finding no content is precisely what being on the frame of a window looks like. Letting that
+    // replace `WindowChrome` is what stopped windows being draggable: the geometric answer was
+    // correct, and the probe threw it away for a vaguer one meaning "use the setting".
+    //
+    // Specific answers still win. A search field in a toolbar is a search field.
+    if (reading.surface == TUCSurfaceKindContent
+        && self.cursorTouchSurface != TUCSurfaceKindUnknown) {
+        [self logGesture:[NSString stringWithFormat:
+                          @"  probe: content after %.0f ms, keeping %@",
+                          reading.latency * 1000.0, TUCNameForSurface(self.cursorTouchSurface)]];
         return;
     }
 
@@ -1956,6 +1972,16 @@ static const CGFloat kTitleBarProbeHeight = 28.0;
 
 
 /**
+ How far inside a window's left, right and bottom edges still counts as its resize border.
+
+ Wider than the few points macOS itself allows, because a finger is not a mouse and cannot be placed
+ to the pixel. The cost of being generous is that the outermost couple of millimetres of a scrolling
+ area drag instead of scrolling, which is the same trade a mouse already makes.
+ */
+static const CGFloat kResizeBorderWidth = 8.0;
+
+
+/**
  What the window list alone can honestly say about `point`.
 
  Certain about two things and deliberately silent about everything else. It knows where windows are,
@@ -2004,7 +2030,20 @@ static const CGFloat kTitleBarProbeHeight = 28.0;
     BOOL isFullScreen = !CGRectIsEmpty(screenBounds)
         && CGRectContainsRect(bounds, CGRectInset(screenBounds, 1, 1));
 
-    if (!isFullScreen && point.y < CGRectGetMinY(bounds) + kTitleBarProbeHeight) {
+    if (isFullScreen) {
+        return TUCSurfaceKindUnknown;
+    }
+
+    if (point.y < CGRectGetMinY(bounds) + kTitleBarProbeHeight) {
+        return TUCSurfaceKindWindowChrome;
+    }
+
+    // The resize border. Nothing in the accessibility tree marks one — the hit test there returns
+    // whatever content the window has drawn up to its edge — so geometry is the only thing that can
+    // find it, and without this a finger at a corner scrolled the content it happened to land on.
+    if (point.x < CGRectGetMinX(bounds) + kResizeBorderWidth
+        || point.x > CGRectGetMaxX(bounds) - kResizeBorderWidth
+        || point.y > CGRectGetMaxY(bounds) - kResizeBorderWidth) {
         return TUCSurfaceKindWindowChrome;
     }
 
