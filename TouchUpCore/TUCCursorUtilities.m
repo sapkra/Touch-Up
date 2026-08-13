@@ -33,6 +33,15 @@
 /// from before them and drop the drag somewhere the user never went.
 @property CGPoint lastDragLocation;
 
+/// Where we last posted the pointer to, so the next event can say how far it moved.
+///
+/// Deliberately a record of what was *posted*, not what was asked for — the property that once held
+/// the requested position was removed for exactly that reason, since the window server clamps and
+/// rounds what it is given. Nothing here is compared against the real pointer, so the distinction
+/// only matters for the delta being self-consistent, which it is: every posted event updates it.
+@property CGPoint lastPostedPointerLocation;
+@property BOOL hasPostedPointerLocation;
+
 @property BOOL isMagnifying;
 @property CGFloat lastPinchDistance;
 
@@ -177,6 +186,58 @@ static Boolean TUCSetCursorHiddenInBackground(Boolean hidden) {
  input this app produced itself. Routing every post through one place is also the only way to be
  sure a new call site cannot quietly skip it.
  */
+/**
+ Records on a pointer event how far the pointer moved to get there.
+
+ A real mouse reports movement twice over: where it now is, and how far it just travelled. We only
+ ever filled in the first, so every drag we posted said the pointer had moved by exactly zero.
+
+ That is invisible almost everywhere, which is what made it survive: anything that reads the event's
+ location behaves identically, so dragging content, panning a map and selecting text all worked. But
+ moving a window by its title bar and resizing one by its edge are tracked from the movement rather
+ than the position — so those saw a drag that never went anywhere, and windows simply would not move,
+ with a mouse button held down and the pointer visibly travelling across the screen.
+
+ Done here rather than at each call site because this is the one funnel every injected event passes
+ through, and a delta filled in at four of five call sites would be a worse bug than none at all.
+ */
+- (void)stampMovementDeltaOn:(CGEventRef)event {
+    CGPoint location = CGEventGetLocation(event);
+
+    // The first event of the process has nothing to measure from. Zero is the honest answer, and it
+    // is also the right one: it says the pointer arrived without travelling, which is what a press
+    // is.
+    if (!self.hasPostedPointerLocation) {
+        CGEventSetIntegerValueField(event, kCGMouseEventDeltaX, 0);
+        CGEventSetIntegerValueField(event, kCGMouseEventDeltaY, 0);
+        self.lastPostedPointerLocation = location;
+        self.hasPostedPointerLocation = YES;
+        return;
+    }
+
+    CGPoint wanted = CGPointMake(location.x - self.lastPostedPointerLocation.x,
+                                 location.y - self.lastPostedPointerLocation.y);
+
+    int64_t dx = llround(wanted.x);
+    int64_t dy = llround(wanted.y);
+
+    CGEventSetIntegerValueField(event, kCGMouseEventDeltaX, dx);
+    CGEventSetIntegerValueField(event, kCGMouseEventDeltaY, dy);
+
+    // Advanced by what was actually reported, not by where the event was — so the fraction that did
+    // not fit into a whole number is still owed, and turns up in the next event.
+    //
+    // Carrying the remainder is the whole point. A finger crossing the glass slowly moves the pointer
+    // a few tenths of a point per report; rounding each of those independently gives zero every time,
+    // so the deltas would say the pointer had never moved however far it actually went. A window
+    // dragged slowly — which is how anyone positions one precisely — would not move at all, while a
+    // quick drag of the same window worked. Summed this way the deltas always add up to the distance
+    // travelled, to within the one point that has not been reported yet.
+    self.lastPostedPointerLocation = CGPointMake(self.lastPostedPointerLocation.x + (CGFloat)dx,
+                                                self.lastPostedPointerLocation.y + (CGFloat)dy);
+}
+
+
 - (void)postSyntheticEvent:(CGEventRef)event {
     if (event == NULL) return;
 
@@ -193,6 +254,7 @@ static Boolean TUCSetCursorHiddenInBackground(Boolean hidden) {
         case kCGEventRightMouseDown:
         case kCGEventRightMouseUp:
             self.timeOfLastSyntheticPointerEvent = [NSDate timeIntervalSinceReferenceDate];
+            [self stampMovementDeltaOn:event];
             break;
         default:
             break;
@@ -357,31 +419,60 @@ static Boolean TUCSetCursorHiddenInBackground(Boolean hidden) {
 
 
 
-- (void)dragCursorTo:(CGPoint)aLocation phase:(NSTouchPhase)phase  {
+- (void)dragCursorTo:(CGPoint)aLocation phase:(NSTouchPhase)phase {
+    [self dragCursorTo:aLocation phase:phase startingNewClickSequence:NO];
+}
+
+
+- (void)dragCursorTo:(CGPoint)aLocation
+               phase:(NSTouchPhase)phase
+startingNewClickSequence:(BOOL)startsNewSequence {
+
+    // Recorded before the release, not after it. This used to return first, so the mouse-up was
+    // posted at the previous report's point and every drag let go a report behind the finger.
+    self.lastDragLocation = aLocation;
+
     if (phase == NSTouchPhaseEnded || phase == NSTouchPhaseCancelled) {
         [self stopDraggingCursor];
         return;
     }
-    
-    
-    self.lastDragLocation = aLocation;
 
     if (self.isLeftMouseDown) {
         CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDragged, aLocation, kCGMouseButtonLeft);
         CGEventSetIntegerValueField(event, kCGMouseEventClickState, self.cursorClickCount);
         [self postSyntheticEvent:event];
         CFRelease(event);
-        
+
     } else {
         [self moveCursorTo:aLocation];
-        [self updateCursorClickCountWithLocation:aLocation];
+
+        // A drag that has to begin as a single click says so, instead of inheriting whatever the
+        // sequence had reached. The sequence is worth having on content — holding after a double
+        // click is how text is selected by word — but on a window's title bar a press carrying a
+        // click state of 2 is the zoom gesture, so a tap followed by a drag in the same place
+        // resized the window instead of moving it.
+        if (startsNewSequence) {
+            [self resetClickSequenceAtLocation:aLocation];
+        } else {
+            [self updateCursorClickCountWithLocation:aLocation];
+        }
+
         CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDown, aLocation, kCGMouseButtonLeft);
         CGEventSetIntegerValueField(event, kCGMouseEventClickState, self.cursorClickCount);
         [self postSyntheticEvent:event];
         CFRelease(event);
-        
+
         self.isLeftMouseDown = YES;
     }
+}
+
+
+/// Begins the click sequence again at 1, and moves its reference point here, so the tap after this
+/// one is measured from where this press landed like any other.
+- (void)resetClickSequenceAtLocation:(CGPoint)aLocation {
+    self.cursorClickCount = 1;
+    self.timeOfLastClick = [NSDate date];
+    self.locationOfLastClick = aLocation;
 }
 
 

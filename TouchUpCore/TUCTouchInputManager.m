@@ -1462,27 +1462,40 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
             }
             break;
             
-        case TUCCursorActionDrag:
-            // On a control, put the button down where the finger landed before moving it.
+        case TUCCursorActionDrag: {
+            // Put the button down where the finger landed, before taking it anywhere.
             //
-            // `dragCursorTo:phase:` presses at wherever it is first called, which is the first report
-            // that registered movement — by then already off the slider thumb by however far the
-            // finger travelled to prove it was moving. The slider jumps that far the instant it is
-            // grabbed. Invisible on a scroll bar or a stepper, obvious on a slider, which is the one
-            // control a user watches while dragging it.
+            // `dragCursorTo:phase:` presses wherever it is first called, which is the first report
+            // that registered movement — by then already a couple of millimetres from where the user
+            // actually grabbed, because that travel is what proved this was a drag and not a tap.
+            // Pressing there is wrong everywhere and fatal in two places: a window's resize border is
+            // about five points wide, so the press lands inside the window and drags its contents
+            // instead of resizing it; and a slider's thumb jumps to the finger the instant it is
+            // touched.
+            //
+            // One finger only. A two-finger drag's origin is where the *first* finger landed, which
+            // can be somewhere else entirely by the time the second arrives.
+            BOOL isOneFingerDrag = (gesture == TUCCursorGestureDrag
+                                    || gesture == TUCCursorGestureHoldAndDrag);
+
+            // Whether a new sequence is needed is decided by where the press lands, so it belongs
+            // with the press. See `-dragCursorTo:phase:startingNewClickSequence:`.
+            BOOL startsNewSequence = (self.cursorTouchSurface == TUCSurfaceKindWindowChrome);
+
             // Asked of the button itself rather than of `cursorTouchDidActuatePress`, which is
             // latched from this same state one report later and so would still read NO here.
-            if (!utils.isLeftMouseDown
-                && self.cursorTouchSurface == TUCSurfaceKindControl
-                && touch.phase != NSTouchPhaseEnded) {
-
+            if (!utils.isLeftMouseDown && isOneFingerDrag && touch.phase != NSTouchPhaseEnded) {
                 CGPoint origin = [self convertScreenPointRelativeToAbsolute:self.cursorTouchOrigin
                                                                 locationID:touch.locationID];
-                [utils dragCursorTo:origin phase:NSTouchPhaseBegan];
+                [utils dragCursorTo:origin
+                              phase:NSTouchPhaseBegan
+           startingNewClickSequence:startsNewSequence];
             }
 
-            [utils dragCursorTo:screenLocation phase:touch.phase];
-            break;
+            [utils dragCursorTo:screenLocation
+                          phase:touch.phase
+       startingNewClickSequence:startsNewSequence];
+            break; }
             
         case TUCCursorActionClick:
             [utils performClickAt:screenLocation];

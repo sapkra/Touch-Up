@@ -82,7 +82,26 @@ static const int64_t kTUCSyntheticEventUserData = 0x54554348; // 'TUCH'
 
 - (void)performSecondaryClickAt:(CGPoint)aLocation;
 
+/**
+ Holds the mouse button down and takes it to `aLocation`, pressing on the first call and releasing
+ when the phase ends.
+
+ The press inherits the running click sequence, so holding after a double click selects text by word
+ the way it does with a mouse.
+ */
 - (void)dragCursorTo:(CGPoint)aLocation phase:(NSTouchPhase)phase;
+
+/**
+ As above, but `startingNewClickSequence` forces the press to be a single click.
+
+ For anywhere a repeated click means something other than "the same thing again": a title bar reads
+ a click state of 2 as the zoom gesture, so a drag begun just after a tap in the same place resized
+ the window rather than moving it.
+ */
+- (void)dragCursorTo:(CGPoint)aLocation
+               phase:(NSTouchPhase)phase
+startingNewClickSequence:(BOOL)startsNewSequence;
+
 - (void)stopDraggingCursor;
 
 - (void)scroll:(CGPoint)translation phase:(NSTouchPhase)phase;
