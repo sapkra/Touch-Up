@@ -278,7 +278,29 @@ final class FocusWatcher {
     private(set) var notificationCount = 0
     private(set) var pollDetectionCount = 0
     private(set) var errorCount = 0
+    private(set) var readCount = 0
     private(set) var lastVerdict: AXFocusProbe.Verdict = .unreadable
+
+    /// The last handful of *distinct* answers, in the same spirit as the gesture log the core keeps:
+    /// when someone reports that the keyboard never opens, this is the difference between reading the
+    /// code and knowing. Identical consecutive answers are collapsed, so a quarter of an hour of
+    /// nothing happening does not push out the one line that matters.
+    private(set) var recentReads: [String] = []
+
+    private func note(_ probe: AXFocusProbe) {
+        let line = "\(probe.ownerBundleID ?? "—") \(probe.role ?? "no role")"
+            + (probe.subrole.map { "/\($0)" } ?? "")
+            + " → \(AXFocusProbe.name(for: probe.verdict))"
+
+        guard line != recentReads.last else { return }
+
+        recentReads.append(line)
+        if recentReads.count > Self.maximumRecentReads {
+            recentReads.removeFirst()
+        }
+    }
+
+    private static let maximumRecentReads = 8
 
 
     // MARK: - Lifecycle
@@ -433,7 +455,9 @@ final class FocusWatcher {
             self?.coaxIfNeeded(pid: pid)
         })
 
+        readCount += 1
         lastVerdict = probe.verdict
+        note(probe)
 
         switch probe.verdict {
         case .unreadable:
@@ -534,15 +558,27 @@ final class FocusWatcher {
     // MARK: - Diagnostics
 
     var diagnosticsDescription: String {
-        """
+        var text = """
         Focus watching: \(isEnabled ? "on" : "off")\
         \(isEnabled && observer == nil
             ? " (polling only — this app accepted no focus notifications)"
             : " (\(registeredNotificationCount) of \(Self.observedNotifications.count) notifications accepted)")
+        Focus asked: \(readCount) times, \(errorCount) refused
         Focus changes seen: \(notificationCount) reported, \(pollDetectionCount) found by polling
-        Focus reads refused: \(errorCount)
         Last verdict: \(AXFocusProbe.name(for: lastVerdict))
+
         """
+
+        // Roles and bundle identifiers only — never a field's contents.
+        text += "Recent focus reads:\n"
+        if recentReads.isEmpty {
+            text += "  (none — nothing has been asked yet)\n"
+        }
+        for line in recentReads {
+            text += "  \(line)\n"
+        }
+
+        return text
     }
 }
 
