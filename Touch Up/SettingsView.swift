@@ -351,7 +351,8 @@ struct SettingsView: View {
     
     var body: some View {
         container
-        .frame(minWidth: 400, maxWidth: .infinity, minHeight: 350,  maxHeight: .infinity)
+        .frame(minWidth: 480, idealWidth: 660, maxWidth: .infinity,
+               minHeight: 400, idealHeight: 760, maxHeight: .infinity)
         
     }
 }

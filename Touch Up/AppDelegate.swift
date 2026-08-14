@@ -141,25 +141,41 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 class SettingsWindow: NSWindow {
     
     var model: TouchUp?
-    
+
+    /// Roomy enough that the explanation next to each setting stays on one or two lines
+    /// and a whole section is readable without scrolling.
+    private static let preferredContentSize = NSSize(width: 660, height: 760)
+
     static func window(model: TouchUp) -> SettingsWindow {
         let vc = NSHostingController(rootView: SettingsView(model:model))
-        let window = SettingsWindow(contentRect: .zero,
+        let window = SettingsWindow(contentRect: NSRect(origin: .zero, size: preferredContentSize),
                                     styleMask: [.closable, .titled, .fullSizeContentView, .resizable],
                                     backing: .buffered,
                                     defer: true,
                                     screen: nil)
-        
+
         window.title = "Touch Up Settings"
         window.tabbingMode = .disallowed
         window.model = model
         window.level = .screenSaver
         window.collectionBehavior = [.canJoinAllSpaces, .transient]
-        
+
         let windowController = NSWindowController(window: window)
-        
+
+        // Adopting the content view controller resizes the window to the hosting
+        // controller's fitting size, so the preferred size has to be applied afterwards.
         windowController.contentViewController = vc
+        window.setContentSize(window.contentSizeFittingScreen(preferredContentSize))
+        window.center()
         return window
+    }
+
+    /// The preferred size, shrunk to whatever the screen can actually show.
+    private func contentSizeFittingScreen(_ preferred: NSSize) -> NSSize {
+        guard let visible = (self.screen ?? NSScreen.main)?.visibleFrame else { return preferred }
+        let available = self.contentRect(forFrameRect: visible).size
+        return NSSize(width: min(preferred.width, available.width),
+                      height: min(preferred.height, available.height))
     }
     
     override func close() {
