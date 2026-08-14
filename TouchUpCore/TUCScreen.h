@@ -10,6 +10,29 @@
 NS_ASSUME_NONNULL_BEGIN
 
 /**
+ Where `-effectivePhysicalSize`'s answer came from.
+
+ Worth reporting, because every millimetre threshold in the gesture engine is only as trustworthy as
+ this one number. When it is `Assumed`, "2.5 mm" is not a measurement — it is `frame.size` divided by
+ a guessed density, and on a panel driven at its native pixel grid that guess can be out by a factor
+ of three, which scales *every* threshold at once. A diagnostics report that prints the millimetres
+ without saying where they came from reads as though they had been measured, which is how the same
+ misconfiguration gets investigated repeatedly.
+ */
+typedef NS_ENUM(NSUInteger, TUCPhysicalSizeSource) {
+    /// The panel's own EDID, by way of `CGDisplayScreenSize`. Trustworthy.
+    TUCPhysicalSizeSourceEDID = 0,
+
+    /// EDID reported nothing usable, so the size is derived from `frame` and an assumed density.
+    /// Every millimetre figure on this screen is a guess of the same accuracy.
+    TUCPhysicalSizeSourceAssumed,
+};
+
+/// For diagnostics: `"EDID"` or `"assumed"`.
+extern NSString *TUCPhysicalSizeSourceName(TUCPhysicalSizeSource source);
+
+
+/**
  `TUCScreen` describes one physically connected display panel.
 
  Unlike `NSScreen`, a `TUCScreen` exists for every connected panel — including the
@@ -64,6 +87,15 @@ NS_ASSUME_NONNULL_BEGIN
 /// (or a nonsensical) EDID size fall back to an assumed density, so millimetre thresholds
 /// never collapse to zero or blow up to infinity.
 - (CGSize)effectivePhysicalSize;
+
+/// Whether `-effectivePhysicalSize` measured or guessed. Check before believing any millimetre
+/// figure derived from this screen.
+- (TUCPhysicalSizeSource)physicalSizeSource;
+
+/// The fraction of the panel glass the drawn content occupies on each axis, as applied by
+/// `-convertGlassPointToContentPoint:`. `{1, 1}` means the content fills the panel; anything less
+/// means macOS is letterboxing, and touches near the affected edges are being rescaled.
+- (CGSize)contentFractionOfGlass;
 
 /// Physical distance in millimetres between two points given in this screen's relative
 /// content coordinates (each axis normalised to [0,1]). Each axis is scaled by its own

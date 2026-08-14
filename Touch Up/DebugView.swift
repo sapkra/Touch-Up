@@ -22,7 +22,14 @@ struct DebugView: View {
     init(model: TouchUp, locationID: HIDLocationID?, closeAction: @escaping ()->Void) {
         self.model = model
         self.locationID = locationID
-        self.pixelsPerMM = model.touchscreen(forLocationID: 0)?.pixelsPerMM() ?? 30
+        // Sizing the contacts needs the density of the panel actually on show. Asking for location
+        // ID 0 asked about whichever screen happened to be connected most recently, so on a machine
+        // with two digitizers the dots were drawn at the wrong scale on at least one of them — and
+        // the overlay whose job is to tell you whether touches land correctly was itself lying
+        // about how big a finger is. When no single digitizer is being shown, the last one touched
+        // is the closest thing to an answer.
+        let sizingID = locationID ?? model.touchManager.locationIDOfLastTouch
+        self.pixelsPerMM = model.touchscreen(forLocationID: sizingID)?.pixelsPerMM() ?? 30
         self.closeAction = closeAction
     }
     

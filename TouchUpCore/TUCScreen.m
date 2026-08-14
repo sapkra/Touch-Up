@@ -13,6 +13,35 @@
 - (nullable NSString *)edidNameForDisplayID:(CGDirectDisplayID)displayID;
 @end
 
+NSString *TUCPhysicalSizeSourceName(TUCPhysicalSizeSource source) {
+    switch (source) {
+        case TUCPhysicalSizeSourceEDID:    return @"EDID";
+        case TUCPhysicalSizeSourceAssumed: return @"assumed";
+    }
+    return @"unknown";
+}
+
+
+/**
+ Points per millimetre to assume when a panel will not say how big it is.
+
+ macOS mostly holds the *point* density of a display steady — a dense panel is driven at a doubled
+ backing scale rather than by shrinking everything — so a guess about points travels further than a
+ guess about pixels would. Across the machines this runs on it lands between roughly 3.9 pt/mm (a
+ non-Retina external at ~100 dpi), 4.3 (a 27" external at "looks like 2560×1440") and 5.0 (a 14"
+ MacBook Pro), so the middle of that range is the least-wrong single number.
+
+ The previous 4.0 was the bottom of it — the 2005 non-Retina desktop case — which made every
+ millimetre threshold read ~12% wide on typical modern hardware.
+
+ What no constant can cover is a dense panel driven at its *native* grid with no scaling, where the
+ true figure is nearer 11 pt/mm and every threshold in the app is consequently ~2.5× too large at
+ once. That is not a better-guess problem; it is why `-physicalSizeSource` exists, so a diagnostics
+ report says the number was guessed instead of quietly presenting it as measured.
+ */
+static const CGFloat kAssumedPointsPerMM = 4.5;
+
+
 @implementation TUCScreen
 
 - (instancetype)initWithDisplayID:(CGDirectDisplayID)displayID
@@ -161,19 +190,23 @@
     return self.frame.size.width / [self effectivePhysicalSize].width;
 }
 
-- (CGSize)effectivePhysicalSize {
+- (TUCPhysicalSizeSource)physicalSizeSource {
     CGSize size = self.nativePhysicalSize;
-    if (size.width > 0 && size.height > 0) {
-        return size;
+    return (size.width > 0 && size.height > 0) ? TUCPhysicalSizeSourceEDID
+                                               : TUCPhysicalSizeSourceAssumed;
+}
+
+- (CGSize)effectivePhysicalSize {
+    if ([self physicalSizeSource] == TUCPhysicalSizeSourceEDID) {
+        return self.nativePhysicalSize;
     }
 
     // Virtual displays, some capture devices and the occasional panel with a broken EDID
     // report a zero physical size. Taken literally that turns every millimetre threshold in
     // the app into either 0 or infinity, so derive a plausible size from the logical frame
-    // instead. `kAssumedPointsPerMM` is ~100 dpi, the usual density of a non-Retina desktop
-    // display — approximate, but in the right order of magnitude, which is all these
-    // thresholds need.
-    static const CGFloat kAssumedPointsPerMM = 4.0;
+    // instead — approximate, but in the right order of magnitude, which is all these
+    // thresholds need. Callers who need to know that it *is* approximate ask
+    // `-physicalSizeSource`.
     return CGSizeMake(self.frame.size.width / kAssumedPointsPerMM,
                       self.frame.size.height / kAssumedPointsPerMM);
 }
@@ -198,6 +231,19 @@
     return absLoc;
 }
 
+- (CGSize)contentFractionOfGlass {
+    CGFloat glassAspect   = self.nativeResolution.width / self.nativeResolution.height;
+    CGFloat contentAspect = self.frame.size.width / self.frame.size.height;
+    if (glassAspect <= 0 || contentAspect <= 0) {
+        return CGSizeMake(1.0, 1.0);
+    }
+
+    // Aspect-fit the content into the glass: it fills one axis fully and is centred on the
+    // other, the remaining strip being the black letterbox/pillarbox bars.
+    return CGSizeMake((contentAspect >= glassAspect) ? 1.0 : contentAspect / glassAspect,
+                      (contentAspect >= glassAspect) ? glassAspect / contentAspect : 1.0);
+}
+
 - (CGPoint)convertGlassPointToContentPoint:(CGPoint)glassPoint {
     CGFloat glassAspect   = self.nativeResolution.width / self.nativeResolution.height;
     CGFloat contentAspect = self.frame.size.width / self.frame.size.height;
@@ -205,10 +251,9 @@
         return glassPoint;
     }
 
-    // Aspect-fit the content into the glass: it fills one axis fully and is centred on the
-    // other, the remaining strip being the black letterbox/pillarbox bars.
-    CGFloat fracW = (contentAspect >= glassAspect) ? 1.0 : contentAspect / glassAspect;
-    CGFloat fracH = (contentAspect >= glassAspect) ? glassAspect / contentAspect : 1.0;
+    CGSize fraction = [self contentFractionOfGlass];
+    CGFloat fracW = fraction.width;
+    CGFloat fracH = fraction.height;
 
     CGFloat x = (glassPoint.x - (1.0 - fracW) / 2.0) / fracW;
     CGFloat y = (glassPoint.y - (1.0 - fracH) / 2.0) / fracH;
@@ -231,7 +276,9 @@
             @"<TUCScreen #%lu \"%@\"\n"
             "   uuid:     %@\n"
             "   native:   %.0f×%.0f px, %.0f×%.0f mm, rotation %.0f°\n"
-            "   logical:  %.0f×%.0f px, %.2f px/mm\n"
+            "   logical:  %.0f×%.0f px, %.2f pt/mm\n"
+            "   physical: %.0f×%.0f mm (%@)\n"
+            "   content:  %.3f×%.3f of glass%@\n"
             "   frame:    %@\n"
             "   mirror:   %@>",
             (unsigned long)self.id, self.name,
@@ -239,6 +286,13 @@
             self.nativeResolution.width, self.nativeResolution.height,
             self.nativePhysicalSize.width, self.nativePhysicalSize.height, self.rotation,
             self.logicalResolution.width, self.logicalResolution.height, [self pixelsPerMM],
+            [self effectivePhysicalSize].width, [self effectivePhysicalSize].height,
+            TUCPhysicalSizeSourceName([self physicalSizeSource]),
+            [self contentFractionOfGlass].width, [self contentFractionOfGlass].height,
+            // Anything but 1×1 means touches near the letterboxed edges are being rescaled, which
+            // is worth saying out loud rather than leaving to be inferred from two decimals.
+            (fabs([self contentFractionOfGlass].width  - 1.0) < 0.001 &&
+             fabs([self contentFractionOfGlass].height - 1.0) < 0.001) ? @"" : @"  ← LETTERBOXED",
             NSStringFromRect(self.frame),
             mirror];
 }
