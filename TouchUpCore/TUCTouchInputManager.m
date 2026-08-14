@@ -585,6 +585,9 @@ static NSString *TUCNameForDigitizerKind(TUCDigitizerKind kind) {
     // is about to produce is posted at `touch.location`, so taking the reported zeroes would put
     // it in the top-left corner of the screen.
     if (!isSuspectOriginReport) {
+        // Recorded from the same starting point the conversion uses, so the two cannot disagree
+        // about which space a measurement was taken in.
+        [touch setUncorrectedGlassLocation:[self mirrorDigitizerPoint:digitizerPoint locationID:locationID]];
         [touch setLocation:[self convertDigitizerPointToRelativeScreenPoint:digitizerPoint locationID:locationID]];
     } else {
         [self noteOnceForLocationID:locationID
@@ -1764,11 +1767,18 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
  the relative hardware points are always in the direction the digitizer is built in.
  If the display is rotated, we need to rotate these points
  */
-- (CGPoint)convertDigitizerPointToRelativeScreenPoint:(CGPoint)devicePoint locationID:(uint32_t)locationID {
-    TUCScreen *screen = [self touchscreenForLocationID:locationID];
+/**
+ The reported point with the user's mirror flags applied and nothing else.
 
-    // Mirror the glass first, while still in the digitizer's own frame: this corrects how the
-    // panel is wired, which is independent of how the display is currently oriented.
+ Split out because this boundary — the digitizer's own frame, before anything is known about how the
+ display is oriented or shaped — is the only one a calibration can be measured against, and
+ `TUCTouch.uncorrectedGlassLocation` has to be recorded at exactly the same point the conversion
+ starts from. Two copies of the mirroring rule that drifted apart would put every measurement in a
+ slightly different space than the one it was meant to correct.
+ */
+- (CGPoint)mirrorDigitizerPoint:(CGPoint)devicePoint locationID:(uint32_t)locationID {
+    // Corrects how the panel is wired, which is independent of how the display is currently
+    // oriented — so it belongs here rather than anywhere downstream of the rotation.
     if (self.delegate != nil) {
         if ([self.delegate digitizerIsFlippedHorizontallyForLocationID:locationID]) {
             devicePoint.x = 1 - devicePoint.x;
@@ -1777,6 +1787,14 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
             devicePoint.y = 1 - devicePoint.y;
         }
     }
+    return devicePoint;
+}
+
+
+- (CGPoint)convertDigitizerPointToRelativeScreenPoint:(CGPoint)devicePoint locationID:(uint32_t)locationID {
+    TUCScreen *screen = [self touchscreenForLocationID:locationID];
+
+    devicePoint = [self mirrorDigitizerPoint:devicePoint locationID:locationID];
 
     CGFloat rotation = screen.rotation;
 
@@ -2195,6 +2213,19 @@ static const CGFloat kResizeBorderWidth = 8.0;
     [lines addObject:[NSString stringWithFormat:@"Slop:     %.1f mm of %.1f mm",
                       [self effectiveTapTolerance], self.tapTolerance]];
 
+    // Those millimetres are only worth the number they are converted through. A panel that would not
+    // say how big it is gets a guessed density, and then a slop behaving like three times its stated
+    // value is indistinguishable — in this readout and in every bug report — from a slop set wrong.
+    TUCScreen *scaleScreen = [self touchscreenForLocationID:locationID];
+    if (scaleScreen != nil) {
+        TUCPhysicalSizeSource source = [scaleScreen physicalSizeSource];
+        [lines addObject:[NSString stringWithFormat:@"Scale:    %.2f pt/mm (%@)%@",
+                          [scaleScreen pixelsPerMM],
+                          TUCPhysicalSizeSourceName(source),
+                          source == TUCPhysicalSizeSourceAssumed
+                            ? @"  — every mm here is a guess" : @""]];
+    }
+
     if (self.classifiesSurfaces) {
         [lines addObject:[NSString stringWithFormat:@"Probes:   %lu answered, %lu in time, %lu too late",
                           (unsigned long)self.surfaceReadingsDelivered,
@@ -2289,6 +2320,38 @@ static const CGFloat kResizeBorderWidth = 8.0;
      self.hidesCursor ? @"YES" : @"NO",
      self.hidesCursor && ![[TUCCursorUtilities sharedInstance] canHideCursorSystemWide]
         ? @" (only while Touch Up is frontmost - the system-wide hook was unavailable)" : @""];
+
+    // What those millimetres are actually worth. Every mm figure above is divided through the mapped
+    // screen's pt/mm before it is compared against anything, so a guessed physical size rescales all
+    // of them together — and the parameters above read identically either way. This is the block
+    // that tells a bug report "drags never start" from "the display never said how big it is".
+    [report appendString:@"\n───── Millimetre basis ─────\n"];
+    if (self.frameIDsByLocationID.count == 0) {
+        [report appendString:@"(no digitizer connected)\n"];
+    }
+    for (NSNumber *key in self.frameIDsByLocationID) {
+        uint32_t locationID = key.unsignedIntValue;
+        TUCScreen *screen = [self touchscreenForLocationID:locationID];
+
+        if (screen == nil) {
+            [report appendFormat:@"digitizer %#010x   no screen resolved - no mm figure applies\n",
+             locationID];
+            continue;
+        }
+
+        TUCPhysicalSizeSource source = [screen physicalSizeSource];
+        [report appendFormat:@"digitizer %#010x   %.2f pt/mm, physical size from %@%@\n",
+         locationID, [screen pixelsPerMM], TUCPhysicalSizeSourceName(source),
+         source == TUCPhysicalSizeSourceAssumed
+            ? @"  ← GUESSED: every mm above is scaled by this" : @""];
+
+        [report appendFormat:@"digitizer %#010x   tapTolerance %.2f mm = %.1f pt here; "
+                              "hold stillness %.1f pt; swipe commit %.0f pt\n",
+         locationID,
+         self.tapTolerance,       self.tapTolerance       * [screen pixelsPerMM],
+         kHoldStillnessTolerance * [screen pixelsPerMM],
+         kSwipeCommitDistance    * [screen pixelsPerMM]];
+    }
 
     [report appendString:@"\n───── Recent gestures ─────\n"];
     if (self.recentGestureLog.count == 0) {
