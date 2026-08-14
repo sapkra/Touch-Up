@@ -152,6 +152,19 @@ NS_ASSUME_NONNULL_BEGIN
  */
 - (NSString *)diagnosticsReport;
 
+
+/**
+ A few lines describing what the gesture machinery believes right now, for a live debugging display.
+
+ The state first — what the finger is on, how that was established, what sort of device it came from
+ — and then the last handful of decisions, newest last, exactly as the diagnostics report shows them.
+
+ Human-readable and deliberately unstructured: this is for reading while touching the glass, which is
+ the only way to see why a gesture went the way it did. Nothing here should be parsed, and nothing
+ here is expensive — it formats state that is already being kept, so it is safe to ask on a timer.
+ */
+- (NSArray<NSString *> *)gestureDebugLines;
+
 @end
 
 NS_ASSUME_NONNULL_END

@@ -35,6 +35,7 @@
 		70AB101B2FE0A10000AB101B /* KeyboardLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70AB101A2FE0A10000AB101A /* KeyboardLayout.swift */; };
 		70AB102B2FE0A10000AB102B /* KeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70AB102A2FE0A10000AB102A /* KeyboardView.swift */; };
 		70AB103B2FE0A10000AB103B /* KeyboardPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70AB103A2FE0A10000AB103A /* KeyboardPanel.swift */; };
+		7A5F20022D00000200CA833C /* GestureInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A5F20012D00000200CA833C /* GestureInspector.swift */; };
 		70AB104B2FE0A10000AB104B /* KeyboardController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70AB104A2FE0A10000AB104A /* KeyboardController.swift */; };
 		70AB105B2FE0A10000AB105B /* TUCKeyboardTyper.h in Headers */ = {isa = PBXBuildFile; fileRef = 70AB105A2FE0A10000AB105A /* TUCKeyboardTyper.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		70AB106B2FE0A10000AB106B /* TUCKeyboardTyper.m in Sources */ = {isa = PBXBuildFile; fileRef = 70AB106A2FE0A10000AB106A /* TUCKeyboardTyper.m */; };
@@ -98,6 +99,7 @@
 		70AB101A2FE0A10000AB101A /* KeyboardLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardLayout.swift; sourceTree = "<group>"; };
 		70AB102A2FE0A10000AB102A /* KeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardView.swift; sourceTree = "<group>"; };
 		70AB103A2FE0A10000AB103A /* KeyboardPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardPanel.swift; sourceTree = "<group>"; };
+		7A5F20012D00000200CA833C /* GestureInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GestureInspector.swift; sourceTree = "<group>"; };
 		70AB104A2FE0A10000AB104A /* KeyboardController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardController.swift; sourceTree = "<group>"; };
 		70AB105A2FE0A10000AB105A /* TUCKeyboardTyper.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TUCKeyboardTyper.h; sourceTree = "<group>"; };
 		70AB106A2FE0A10000AB106A /* TUCKeyboardTyper.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TUCKeyboardTyper.m; sourceTree = "<group>"; };
@@ -159,6 +161,7 @@
 				70AB101A2FE0A10000AB101A /* KeyboardLayout.swift */,
 				70AB102A2FE0A10000AB102A /* KeyboardView.swift */,
 				70AB103A2FE0A10000AB103A /* KeyboardPanel.swift */,
+				7A5F20012D00000200CA833C /* GestureInspector.swift */,
 				70AB104A2FE0A10000AB104A /* KeyboardController.swift */,
 				7052F431298D2D280066014F /* Assets.xcassets */,
 				70FE7F8B2F858616005FF048 /* Icon.icon */,
@@ -320,6 +323,7 @@
 				70AB101B2FE0A10000AB101B /* KeyboardLayout.swift in Sources */,
 				70AB102B2FE0A10000AB102B /* KeyboardView.swift in Sources */,
 				70AB103B2FE0A10000AB103B /* KeyboardPanel.swift in Sources */,
+				7A5F20022D00000200CA833C /* GestureInspector.swift in Sources */,
 				70AB104B2FE0A10000AB104B /* KeyboardController.swift in Sources */,
 				70D2AFCF2FC04C0800342757 /* HIDLocationID.swift in Sources */,
 				704B2C6929978B2900A1DE4D /* DebugView.swift in Sources */,

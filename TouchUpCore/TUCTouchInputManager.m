@@ -1940,6 +1940,15 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
 
         if (!isInside) continue;
 
+        // Our own windows are not scenery the user is touching, they are the instrument they are
+        // touching *with* — the on-screen keyboard, the touch test overlay, the gesture inspector.
+        // Skipped outright, and it matters twice over. Classifying them would make the bottom row of
+        // the keyboard a resize border and its top edge a title bar, so a key press would drag the
+        // panel instead of typing. And raising them would activate Touch Up, which is the one thing
+        // `KeyboardPanel` exists to prevent: the application being typed into would lose focus, and
+        // with it the insertion point the keyboard was summoned to fill.
+        if (currPID == getpid()) continue;
+
         NSString *ownerName = (__bridge NSString *)CFDictionaryGetValue(dic, kCGWindowOwnerName);
         if ([self isSystemChromeOwner:currPID name:ownerName]) {
             // Only the topmost thing under the finger describes what was touched. Chrome behind a
@@ -2139,6 +2148,55 @@ static const CGFloat kResizeBorderWidth = 8.0;
 - (void)triggerSystemAccessibilityAccessAlert {
     CGPoint loc = [[TUCCursorUtilities sharedInstance] currentCursorLocation];
     [[TUCCursorUtilities sharedInstance] moveCursorTo:loc];
+}
+
+
+- (NSArray<NSString *> *)gestureDebugLines {
+    NSMutableArray<NSString *> *lines = [NSMutableArray array];
+
+    if (!self.classifiesSurfaces) {
+        [lines addObject:@"Surfaces: off — every gesture uses its setting"];
+    } else {
+        // What the finger is on, and how much that is worth. The source is the part worth watching:
+        // it is the difference between an answer the element gave and one inferred from a rectangle,
+        // and it decides whether a drag may start.
+        [lines addObject:[NSString stringWithFormat:@"Surface:  %@  (%@, %@)",
+                          TUCNameForSurface(self.cursorTouchSurface),
+                          TUCNameForSurfaceSource(self.cursorTouchSurfaceSource),
+                          TUCNameForSurfaceState(self.cursorTouchSurfaceState)]];
+    }
+
+    uint32_t locationID = self.cursorTouch ? self.cursorTouch.locationID : self.locationIDOfLastTouch;
+    [lines addObject:[NSString stringWithFormat:@"Device:   %@%@",
+                      TUCNameForDigitizerKind([self digitizerKindForLocationID:locationID]),
+                      TouchDeviceDrivesPointer(locationID) ? @"" : @"  (not driving the pointer)"]];
+
+    [lines addObject:[NSString stringWithFormat:@"Slop:     %.1f mm of %.1f mm",
+                      [self effectiveTapTolerance], self.tapTolerance]];
+
+    if (self.classifiesSurfaces) {
+        [lines addObject:[NSString stringWithFormat:@"Probes:   %lu answered, %lu in time, %lu too late",
+                          (unsigned long)self.surfaceReadingsDelivered,
+                          (unsigned long)self.surfaceAnswersInTimeCount,
+                          (unsigned long)self.surfaceLateAnswerCount]];
+    }
+
+    [lines addObject:@""];
+
+    if (self.recentGestureLog.count == 0) {
+        [lines addObject:@"(touch the screen)"];
+    } else {
+        // The tail only. The full record is kept for the diagnostics report; a readout meant to sit
+        // in a corner while you work stops being one at twenty-four lines.
+        static const NSUInteger kVisibleEntries = 8;
+        NSUInteger start = self.recentGestureLog.count > kVisibleEntries
+            ? self.recentGestureLog.count - kVisibleEntries : 0;
+        for (NSUInteger i = start; i < self.recentGestureLog.count; i++) {
+            [lines addObject:self.recentGestureLog[i]];
+        }
+    }
+
+    return lines;
 }
 
 

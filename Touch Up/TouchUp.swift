@@ -39,6 +39,11 @@ class TouchUp: NSObject, ObservableObject {
     @Published var twoFingerDragAction: TwoFingerDragAction = .drag
     @Published var isSystemSwipeEnabled = true
     @Published var isSurfaceAwareGesturesEnabled = false
+    @Published var isGestureInspectorEnabled = false
+
+    /// What the gesture inspector is currently showing. Refreshed on its own clock, never from the
+    /// report path — see `GestureInspector`.
+    @Published var gestureDebugLines: [String] = []
 
     @Published var isOnScreenKeyboardEnabled = false
     @Published var isKeyboardAutoShowEnabled = false
@@ -70,6 +75,10 @@ class TouchUp: NSObject, ObservableObject {
     /// Owned here rather than by the app delegate because the model is what learns that the user has
     /// moved to a different panel, and the keyboard has to follow them.
     private(set) var keyboard: KeyboardController!
+
+    /// The live readout of what gestures are being decided, for working out why one went the way it
+    /// did. Nothing depends on it and it is off by default; it only ever reads.
+    private(set) var gestureInspector: GestureInspector!
 
 
     @objc func screenParametersDidChange() {
@@ -241,6 +250,7 @@ class TouchUp: NSObject, ObservableObject {
         super.init()
 
         self.keyboard = KeyboardController(model: self)
+        self.gestureInspector = GestureInspector(model: self)
 
         self.loadDigitizerConfigs()
         self.screenParametersDidChange()
@@ -287,6 +297,7 @@ extension TouchUp {
             "twoFingerDragAction" : TwoFingerDragAction.drag.rawValue,
             "isSystemSwipeEnabled" : true,
             "isSurfaceAwareGesturesEnabled" : false,
+            "isGestureInspectorEnabled" : false,
             "areAdditionalDigitizerRotationSettingsVisible" : false,
 
             // Off by default. A machine with a keyboard attached does not want a second one taking up
@@ -348,6 +359,7 @@ extension TouchUp {
         twoFingerDragAction = TwoFingerDragAction(rawValue: defaults.integer(forKey: "twoFingerDragAction")) ?? .drag
         isSystemSwipeEnabled = defaults.bool(forKey: "isSystemSwipeEnabled")
         isSurfaceAwareGesturesEnabled = defaults.bool(forKey: "isSurfaceAwareGesturesEnabled")
+        isGestureInspectorEnabled = defaults.bool(forKey: "isGestureInspectorEnabled")
         areAdditionalDigitizerRotationSettingsVisible = defaults.bool(forKey: "areAdditionalDigitizerRotationSettingsVisible")
         isOnScreenKeyboardEnabled = defaults.bool(forKey: "isOnScreenKeyboardEnabled")
         isKeyboardAutoShowEnabled = defaults.bool(forKey: "isKeyboardAutoShowEnabled")
@@ -360,7 +372,11 @@ extension TouchUp {
                 .sink { [weak self] isEnabled, isAutomatic in
                     self?.keyboard.isAutomatic = isEnabled && isAutomatic
                     if !isEnabled { self?.keyboard.hide() }
-                }
+                },
+
+            $isGestureInspectorEnabled.sink { [weak self] isEnabled in
+                self?.gestureInspector.isEnabled = isEnabled
+            }
         ])
     }
     
@@ -386,6 +402,7 @@ extension TouchUp {
         defaults.set(twoFingerDragAction.rawValue, forKey: "twoFingerDragAction")
         defaults.set(isSystemSwipeEnabled, forKey: "isSystemSwipeEnabled")
         defaults.set(isSurfaceAwareGesturesEnabled, forKey: "isSurfaceAwareGesturesEnabled")
+        defaults.set(isGestureInspectorEnabled, forKey: "isGestureInspectorEnabled")
         defaults.set(areAdditionalDigitizerRotationSettingsVisible, forKey: "areAdditionalDigitizerRotationSettingsVisible")
         defaults.set(isOnScreenKeyboardEnabled, forKey: "isOnScreenKeyboardEnabled")
         defaults.set(isKeyboardAutoShowEnabled, forKey: "isKeyboardAutoShowEnabled")
@@ -802,6 +819,10 @@ extension TouchUp {
         case \.isSurfaceAwareGesturesEnabled:
             return("Notice What You Touch",
                    "Ask what is under your finger before deciding what a gesture means, the way a tablet does. One finger scrolls a web page, but drags a window by its title bar, moves a file on the desktop, and works a slider directly. Where nothing can be read — an application with no accessibility support, or a full-screen game — the setting above applies exactly as before.")
+
+        case \.isGestureInspectorEnabled:
+            return("Show What Touch Up Decides",
+                   "A small readout in the corner of the screen you are touching, showing what each touch was taken to be on and what that turned it into. For working out why a gesture did the wrong thing — it ignores touches entirely, so watching one cannot change it. Separate from the touch test above, which shows the raw contact points instead.")
 
         case \.twoFingerDragAction:
             return("On Two Finger Drag",
