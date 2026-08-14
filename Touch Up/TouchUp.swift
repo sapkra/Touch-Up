@@ -41,10 +41,6 @@ class TouchUp: NSObject, ObservableObject {
     @Published var isSurfaceAwareGesturesEnabled = false
     @Published var isGestureInspectorEnabled = false
 
-    /// What the gesture inspector is currently showing. Refreshed on its own clock, never from the
-    /// report path — see `GestureInspector`.
-    @Published var gestureDebugLines: [String] = []
-
     @Published var isOnScreenKeyboardEnabled = false
     @Published var isKeyboardAutoShowEnabled = false
 
