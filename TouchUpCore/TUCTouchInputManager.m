@@ -17,6 +17,16 @@
 
 @property NSMutableDictionary<NSNumber *, NSNumber *> *frameIDsByLocationID;
 
+/// How fast each digitizer is actually reporting, sampled over the last window of reports.
+///
+/// Measured over a fixed count rather than averaged since the device appeared: reports only arrive
+/// while a finger is down, so a lifetime average is mostly a measure of how long the screen sat
+/// untouched. What is worth knowing is the rate while in use — a panel reporting at 30 Hz and one
+/// at 120 Hz feel entirely different and are told apart by nothing else in the diagnostics.
+@property NSMutableDictionary<NSNumber *, NSNumber *> *reportRatesByLocationID;
+@property NSMutableDictionary<NSNumber *, NSNumber *> *rateWindowStartTimeByLocationID;
+@property NSMutableDictionary<NSNumber *, NSNumber *> *rateWindowStartFrameByLocationID;
+
 @property (weak, nullable) TUCTouch *cursorTouch;
 @property (weak, nullable) TUCTouch *gestureAdditionalTouch;
 
@@ -435,6 +445,9 @@ static NSString *TUCNameForDigitizerKind(TUCDigitizerKind kind) {
     }
 
     [self.frameIDsByLocationID removeObjectForKey:@(locationID)];
+    [self.reportRatesByLocationID removeObjectForKey:@(locationID)];
+    [self.rateWindowStartFrameByLocationID removeObjectForKey:@(locationID)];
+    [self.rateWindowStartTimeByLocationID removeObjectForKey:@(locationID)];
     [self.delegate touchscreenDidDisconnectWithLocationID:locationID];
 }
 
@@ -467,8 +480,50 @@ static NSString *TUCNameForDigitizerKind(TUCDigitizerKind kind) {
 
     self.frameIDsByLocationID[@(locationID)] = @(currentFrameID + 1);
 
+    [self updateReportRateForLocationID:locationID atFrame:currentFrameID];
+
     [self processTouchesForCursorInput];
 
+}
+
+
+/**
+ Recomputes a digitizer's reporting rate once every `kRateWindowReports` reports.
+
+ Two dictionary reads and a subtraction on the report path, and only on one report in sixty. The
+ whole point of the figure is to characterise the device, so paying anything noticeable per report to
+ obtain it would be measuring the cost of the measurement.
+
+ A window that spans a gap between two separate touches reports a uselessly low rate — the finger was
+ off the glass for most of it. Rather than track liveness, discard any window longer than a couple of
+ seconds and start again: a window that long cannot have been continuous at any plausible rate.
+ */
+- (void)updateReportRateForLocationID:(uint32_t)locationID atFrame:(NSInteger)currentFrameID {
+    static const NSInteger kRateWindowReports = 60;
+    static const NSTimeInterval kMaxPlausibleWindow = 2.0;
+
+    NSNumber *key = @(locationID);
+    NSNumber *startFrame = self.rateWindowStartFrameByLocationID[key];
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+
+    if (startFrame == nil) {
+        self.rateWindowStartFrameByLocationID[key] = @(currentFrameID);
+        self.rateWindowStartTimeByLocationID[key] = @(now);
+        return;
+    }
+
+    NSInteger elapsedReports = currentFrameID - startFrame.integerValue;
+    if (elapsedReports < kRateWindowReports) {
+        return;
+    }
+
+    NSTimeInterval elapsed = now - self.rateWindowStartTimeByLocationID[key].doubleValue;
+    if (elapsed > 0 && elapsed <= kMaxPlausibleWindow) {
+        self.reportRatesByLocationID[key] = @(elapsedReports / elapsed);
+    }
+
+    self.rateWindowStartFrameByLocationID[key] = @(currentFrameID);
+    self.rateWindowStartTimeByLocationID[key] = @(now);
 }
 
 
@@ -2153,6 +2208,9 @@ static const CGFloat kResizeBorderWidth = 8.0;
         self.cursorTouchStationarySinceDate = nil;
 
         self.frameIDsByLocationID = [NSMutableDictionary new];
+        self.reportRatesByLocationID = [NSMutableDictionary new];
+        self.rateWindowStartTimeByLocationID = [NSMutableDictionary new];
+        self.rateWindowStartFrameByLocationID = [NSMutableDictionary new];
         self.notedDeviceObservations = [NSMutableSet new];
         self.recentGestureLog = [NSMutableArray new];
         self.identifiedMultitouchGesture = _TUCCursorGestureNone;
@@ -2288,6 +2346,11 @@ static const CGFloat kResizeBorderWidth = 8.0;
 
         [report appendFormat:@"digitizer %#010x   drives pointer: %@\n", locationID,
          TouchDeviceDrivesPointer(locationID) ? @"YES" : @"NO - it will never produce any input"];
+
+        NSNumber *rate = self.reportRatesByLocationID[key];
+        [report appendFormat:@"digitizer %#010x   report rate: %@\n", locationID,
+         rate ? [NSString stringWithFormat:@"%.0f Hz while touched", rate.doubleValue]
+              : @"not measured yet - touch and drag for a moment, then copy this again"];
 
         [report appendFormat:@"digitizer %#010x -> %@   (extra rotation %+.0f°, mirrored %@)\n",
          locationID,
