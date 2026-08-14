@@ -1898,13 +1898,17 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
  System chrome — the Dock, Control Center — is skipped rather than returned, which is what the raise
  decision needs. `outFrontmostHitIsChrome` reports that it was passed over anyway, since a finger on
  the Dock has touched something even though there is nothing there to raise.
+
+ One of our own windows ends the walk and sets `outHitOwnWindow`, returning NO. The finger is on the
+ keyboard or the inspector; there is nothing there to raise and nothing there to classify.
  */
 - (BOOL)findWindowUnderPoint:(CGPoint)point
                        owner:(pid_t *)outOwner
                       bounds:(CGRect *)outBounds
                    ownerName:(NSString * __autoreleasing *)outOwnerName
      isBehindFrontmostWindow:(BOOL *)outIsBehind
-        frontmostHitIsChrome:(BOOL *)outFrontmostHitIsChrome {
+        frontmostHitIsChrome:(BOOL *)outFrontmostHitIsChrome
+                hitOwnWindow:(BOOL *)outHitOwnWindow {
 
     pid_t frontmostPID = [[[NSWorkspace sharedWorkspace] frontmostApplication] processIdentifier];
 
@@ -1920,6 +1924,7 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
     BOOL found = NO;
 
     if (outFrontmostHitIsChrome) *outFrontmostHitIsChrome = NO;
+    if (outHitOwnWindow) *outHitOwnWindow = NO;
 
     for (CFIndex i = 0; i < CFArrayGetCount(array); i++) {
         CFDictionaryRef dic = CFArrayGetValueAtIndex(array, i);
@@ -1941,13 +1946,20 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
         if (!isInside) continue;
 
         // Our own windows are not scenery the user is touching, they are the instrument they are
-        // touching *with* — the on-screen keyboard, the touch test overlay, the gesture inspector.
-        // Skipped outright, and it matters twice over. Classifying them would make the bottom row of
-        // the keyboard a resize border and its top edge a title bar, so a key press would drag the
-        // panel instead of typing. And raising them would activate Touch Up, which is the one thing
-        // `KeyboardPanel` exists to prevent: the application being typed into would lose focus, and
-        // with it the insertion point the keyboard was summoned to fill.
-        if (currPID == getpid()) continue;
+        // touching *with* — the on-screen keyboard, the touch test overlay, the gesture inspector,
+        // the settings window. The finger has reached one of them and stops there.
+        //
+        // **Ending the walk is the whole point; skipping past it was actively harmful.** Whatever is
+        // behind our window is not what was touched, and offering it up meant that with the settings
+        // window open — which makes Touch Up frontmost — every press handed the application *behind*
+        // the settings window to `-applicationToRaiseForPoint:`, which duly activated it. The window
+        // being touched lost focus on every press, and got it back on lift only because the tap's own
+        // click landed on an inactive window and activated us again. Dragging a slider therefore
+        // flickered focus between two applications on every single touch.
+        if (currPID == getpid()) {
+            if (outHitOwnWindow) *outHitOwnWindow = YES;
+            break;
+        }
 
         NSString *ownerName = (__bridge NSString *)CFDictionaryGetValue(dic, kCGWindowOwnerName);
         if ([self isSystemChromeOwner:currPID name:ownerName]) {
@@ -2012,13 +2024,21 @@ static const CGFloat kResizeBorderWidth = 8.0;
 
     CGRect bounds = CGRectZero;
     BOOL hitIsChrome = NO;
+    BOOL hitOwnWindow = NO;
 
     BOOL found = [self findWindowUnderPoint:point
                                      owner:NULL
                                     bounds:&bounds
                                  ownerName:NULL
                    isBehindFrontmostWindow:NULL
-                      frontmostHitIsChrome:&hitIsChrome];
+                      frontmostHitIsChrome:&hitIsChrome
+                              hitOwnWindow:&hitOwnWindow];
+
+    // Our own interface. Emphatically not `Desktop`, which is what "found nothing" would otherwise
+    // mean here — that would make the on-screen keyboard draggable and every key press a drag.
+    if (hitOwnWindow) {
+        return TUCSurfaceKindUnknown;
+    }
 
     // Checked before `found`, because chrome sitting in front of a window is what the finger
     // actually reached.
@@ -2093,7 +2113,8 @@ static const CGFloat kResizeBorderWidth = 8.0;
                              bounds:NULL
                           ownerName:NULL
             isBehindFrontmostWindow:&isBehind
-               frontmostHitIsChrome:NULL]) {
+               frontmostHitIsChrome:NULL
+                       hitOwnWindow:NULL]) {
         return 0;
     }
 

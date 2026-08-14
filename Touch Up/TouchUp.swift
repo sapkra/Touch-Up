@@ -630,11 +630,33 @@ extension TouchUp: TUCTouchDelegate {
         // Read successfully, and it is nothing in particular — so the setting is the best answer
         // there is. Kept separate from `.unknown` all the same: one of them is an answer.
         case .content, .textArea, .unknown:
-            return action(for: .TUCCursorGestureDrag)
+            return settledDragAction(on: context)
 
         @unknown default:
-            return action(for: .TUCCursorGestureDrag)
+            return settledDragAction(on: context)
         }
+    }
+
+
+    /// What the settings say one finger should do, held back from pressing the button while an answer
+    /// about the surface is still on its way.
+    ///
+    /// The asymmetry is the whole reason this feature can decide before it knows: a wrong scroll costs
+    /// a few pixels the user scrolls back, while a wrong drag selects text, picks up a file, or moves
+    /// a window — something they have to notice and undo. So an answer that has been asked for and not
+    /// yet arrived may narrow what happens, never widen it.
+    ///
+    /// Without this, a flick that outran the probe fell straight through to the setting. With the
+    /// setting on *Drag* that meant a quick flick dragged and only a slow one — one that gave the
+    /// probe time to answer `scrollArea` — scrolled, which reads exactly as "scrolling only works if
+    /// I hold still first".
+    ///
+    /// Only `pending` is held back. An application that cannot be read at all reports `unavailable`,
+    /// and there the setting is the best and final answer.
+    private func settledDragAction(on context: TUCGestureContext) -> TUCCursorAction {
+        let settled = action(for: .TUCCursorGestureDrag)
+        guard context.surfaceState == .pending, settled == .drag else { return settled }
+        return .scroll
     }
 
 
