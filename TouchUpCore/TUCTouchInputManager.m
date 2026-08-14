@@ -771,6 +771,16 @@ static NSString *TUCNameForDigitizerKind(TUCDigitizerKind kind) {
  */
 static const CGFloat kDirectManipulationTolerance = 1.0;
 
+/**
+ How much of the user's tap slop direct manipulation keeps.
+
+ Not a taste: it is the ratio at which the two values already shipped meet, the default
+ `tapTolerance` of 2.5 mm landing exactly on `kDirectManipulationTolerance`. A user who never opens
+ the slider therefore gets precisely the behaviour that was tuned for them, and the figure only
+ diverges for someone who deliberately raised it.
+ */
+static const CGFloat kDirectManipulationToleranceFraction = 0.4;
+
 - (CGFloat)effectiveTapTolerance {
     switch (self.cursorTouchSurface) {
         case TUCSurfaceKindWindowChrome:
@@ -778,7 +788,15 @@ static const CGFloat kDirectManipulationTolerance = 1.0;
             // Whatever established it. This used to insist on an answer from the element itself,
             // which a title bar can never provide — so the one surface most in need of a tight slop
             // was the one that never got it.
-            return MIN(self.tapTolerance, kDirectManipulationTolerance);
+            //
+            // A proportion of the user's setting rather than a cap at `kDirectManipulationTolerance`.
+            // Chrome is not only draggable: it is the Dock, the menu bar and every toolbar button —
+            // the most tap-heavy surfaces there are. Holding them at 1 mm on a panel whose contacts
+            // wander further than that disqualifies those taps and turns them into drags, so the
+            // icons that most need to be clickable become the ones that cannot be clicked, and
+            // raising the slider — the one remedy offered for a noisy panel — does nothing for them.
+            return MAX(kDirectManipulationTolerance,
+                       self.tapTolerance * kDirectManipulationToleranceFraction);
 
         default:
             return self.tapTolerance;
