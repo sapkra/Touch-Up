@@ -195,7 +195,19 @@ typedef NS_ENUM(NSUInteger, TUCSurfaceState) {
 @property uint32_t locationID;
 
 @property BOOL isOnSurface; //tip
-@property BOOL confidenceFlag;
+
+/**
+ Whether the digitizer is confident this contact is a fingertip rather than a palm or a sleeve.
+
+ This is HID's `TouchValid` usage, and its sense is the one the specification gives it: **true
+ means trust this contact**. It was previously carried under a name that said the opposite, which
+ mattered the moment anything acted on it.
+
+ Defaults to true, and stays true for the whole of a touch on a panel whose descriptor omits the
+ usage — which is most of them. A contact nobody has expressed an opinion about is a finger; the
+ alternative reading would reject every touch on every screen that does not report confidence.
+ */
+@property BOOL isConfidentFinger;
 
 @property CGSize size;
 @property CGFloat azimuth;

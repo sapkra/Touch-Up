@@ -579,7 +579,7 @@ static NSString *TUCNameForDigitizerKind(TUCDigitizerKind kind) {
 /**
  Most important event handling callback: it posts the events to the system where the touches need to go
  */
-- (void)updateTouch:(NSInteger)contactID locationID:(uint32_t)locationID withLocation:(CGPoint)digitizerPoint onSurface:(BOOL)isOnSurface tooLargeForFinger:(BOOL)confidenceFlag {
+- (void)updateTouch:(NSInteger)contactID locationID:(uint32_t)locationID withLocation:(CGPoint)digitizerPoint onSurface:(BOOL)isOnSurface confidentFinger:(BOOL)isConfidentFinger {
     
     // A report at the exact origin is the erroneous data `ignoreOriginTouches` exists for — but
     // only while the finger is still on the glass. A lift-off report is about the finger being
@@ -699,7 +699,7 @@ static NSString *TUCNameForDigitizerKind(TUCDigitizerKind kind) {
     }
 
     [touch setIsOnSurface:isOnSurface];
-    [touch setConfidenceFlag:confidenceFlag];
+    [touch setIsConfidentFinger:isConfidentFinger];
     [touch setLastUpdated:[self currentFrameIDForLocationID:locationID]];
     [touch setLastUpdatedTime:[NSDate timeIntervalSinceReferenceDate]];
     
@@ -2460,9 +2460,9 @@ static const CGFloat kResizeBorderWidth = 8.0;
 
 #pragma mark - Bridge calls of C Header to Objective-C
 
-void TouchInputManagerUpdateTouchPosition(void *self, uint32_t locationID, CFIndex contactID, CGFloat x, CGFloat y, Boolean onSurface, Boolean isValid) {
+void TouchInputManagerUpdateTouchPosition(void *self, uint32_t locationID, CFIndex contactID, CGFloat x, CGFloat y, Boolean onSurface, Boolean isConfidentFinger) {
     CGPoint point = CGPointMake(x, y);
-    [(__bridge id)self updateTouch:(NSInteger)contactID locationID:locationID withLocation:point onSurface:onSurface tooLargeForFinger:isValid];
+    [(__bridge id)self updateTouch:(NSInteger)contactID locationID:locationID withLocation:point onSurface:onSurface confidentFinger:isConfidentFinger];
 }
 
 void TouchInputManagerUpdateTouchSize(void *self, uint32_t locationID, CFIndex contactID, CGFloat width, CGFloat height, CGFloat azimuth) {

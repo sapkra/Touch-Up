@@ -45,7 +45,7 @@
         _location = CGPointZero;
         
         _isOnSurface = true;
-        _confidenceFlag = false;
+        _isConfidentFinger = true;
         
         _size = CGSizeZero;
         _azimuth = 0;

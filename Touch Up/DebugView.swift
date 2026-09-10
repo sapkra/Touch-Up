@@ -71,7 +71,11 @@ struct DebugView: View {
                         ForEach(allTouches, id:\.uuid) { point in
                             Circle()
                                 .foregroundColor(colorForPhase(point.phase))
-                                .border(Color.gray, width: point.confidenceFlag ? 5: 0)
+                                // Ringed when the digitizer says this contact is *not* a
+                                // fingertip. The test is the way round it is because the flag
+                                // now means what HID means by it — so a ring is the unusual
+                                // case worth looking at, where before every touch wore one.
+                                .border(Color.gray, width: point.isConfidentFinger ? 0 : 5)
                                 .opacity(point.isActive() ? 1 : 0.5)
                                 .frame(width: 16 * pixelsPerMM, height: 16 * pixelsPerMM)
                                 .position(x: geo.size.width * point.location.x,

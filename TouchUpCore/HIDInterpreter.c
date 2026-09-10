@@ -672,7 +672,12 @@ void DispatchTouchDataForCollection(HIDDeviceState *device, IOHIDElementRef coll
 
     CFIndex contactID = 0;
     CFIndex tipSwitch = 0;
-    CFIndex isValid = 0;
+
+    // Starts true, because most descriptors never mention `TouchValid` at all and a contact
+    // nobody has expressed an opinion about is a finger. Starting false meant every touch on
+    // every panel that omits the usage was marked unconfident — harmless only for as long as
+    // nothing acted on it.
+    CFIndex isConfidentFinger = 1;
 
     CFIndex width   = kCFNotFound;
     CFIndex height  = kCFNotFound;
@@ -703,7 +708,7 @@ void DispatchTouchDataForCollection(HIDDeviceState *device, IOHIDElementRef coll
                 } else if (usage == kHIDUsage_Dig_TipSwitch) {
                     tipSwitch = value;
                 } else if (usage == kHIDUsage_Dig_TouchValid) {
-                    isValid = value;
+                    isConfidentFinger = value;
                 } else if (usage == kHIDUsage_Dig_Width) {
                     width = value;
                 } else if (usage == kHIDUsage_Dig_Height) {
@@ -735,12 +740,22 @@ void DispatchTouchDataForCollection(HIDDeviceState *device, IOHIDElementRef coll
         return;
     }
 
-    TouchInputManagerUpdateTouchPosition(gTouchManager, device->locationID, contactID, x, y, (int)tipSwitch, (int)isValid);
-    
-    //    if (width != kCFNotFound && height != kCFNotFound && azimuth != kCFNotFound) {
-    //        TouchInputManagerUpdateTouchSize(gTouchManager, contactID, (CGFloat)width, (CGFloat)height, (CGFloat)azimuth);
-    //    }
-    
+    TouchInputManagerUpdateTouchPosition(gTouchManager, device->locationID, contactID, x, y, (int)tipSwitch, (int)isConfidentFinger);
+
+    // How big the contact is, which is the other half of telling a fingertip from a palm. Sent
+    // whenever the descriptor carries it; a panel that reports neither axis simply never calls
+    // this and its touches keep a zero size, which is the "we were not told" value.
+    //
+    // Azimuth is optional even when the extents are present — plenty of descriptors give width
+    // and height and no orientation — so it is passed as zero rather than suppressing the whole
+    // report. This spent years commented out, and had gone stale while it sat there: the call
+    // was missing the location ID that the selector behind it grew, so it would not have built.
+    if (width != kCFNotFound || height != kCFNotFound) {
+        TouchInputManagerUpdateTouchSize(gTouchManager, device->locationID, contactID,
+                                         (CGFloat)(width  == kCFNotFound ? 0 : width),
+                                         (CGFloat)(height == kCFNotFound ? 0 : height),
+                                         (CGFloat)(azimuth == kCFNotFound ? 0 : azimuth));
+    }
 }
 
 
