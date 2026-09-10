@@ -913,6 +913,48 @@ static NSTimeInterval TUCMomentumDurationForSpeed(CGFloat initialSpeed) {
 }
 
 
+/**
+ The real key behind each modifier flag, so a modifier can be held and released rather than merely
+ asserted on somebody else's event.
+ */
+static const struct { CGEventFlags flag; CGKeyCode key; } kTUCModifierKeys[] = {
+    { kCGEventFlagMaskCommand,   kVK_Command },
+    { kCGEventFlagMaskShift,     kVK_Shift },
+    { kCGEventFlagMaskAlternate, kVK_Option },
+    { kCGEventFlagMaskControl,   kVK_Control },
+};
+
+
+/// Presses or releases one modifier key for real, leaving exactly `flags` asserted afterwards.
+- (void)postModifierKey:(CGKeyCode)key remainingFlags:(CGEventFlags)flags down:(BOOL)down {
+    CGEventRef event = CGEventCreateKeyboardEvent(NULL, key, down);
+    if (!event) return;
+
+    CGEventSetType(event, kCGEventFlagsChanged);
+    CGEventSetFlags(event, flags);
+    [self postSyntheticEvent:event];
+    CFRelease(event);
+}
+
+
+/**
+ Types one key with modifiers held around it.
+
+ The modifiers are pressed and released as real keys either side of the keystroke, rather than
+ only stamped onto it. Stamping alone is what the three-finger sweeps used to do, and it leaves the
+ modifier **latched in the window server** — asserting a flag on a key-up says the modifier is
+ still down at the moment of release, and nothing afterwards ever says otherwise.
+
+ That is not a cosmetic leak. A fresh `CGEventCreateMouseEvent` inherits the session's current
+ flags, so every click Touch Up posted after one sweep carried Control — and a Control-click is a
+ secondary click. The symptom is a machine where suddenly every tap opens the context menu, for
+ good, until a real Control key is pressed and released. The on-screen keyboard's shift and command
+ keys had the same fault, latching in the same way.
+
+ One consequence worth accepting: if the user is physically holding a modifier when this runs, the
+ release below drops it. The next event from the real keyboard asserts it again, and the
+ alternative is the latch above.
+ */
 - (void)pressKey:(CGKeyCode)keyCode modifiers:(CGEventFlags)modifiers {
     // An arrow key pressed on a real keyboard carries these two alongside whatever the user is
     // holding, and the system matches its shortcuts against the whole flag set. Without them a
@@ -929,6 +971,16 @@ static NSTimeInterval TUCMomentumDurationForSpeed(CGFloat initialSpeed) {
             break;
     }
 
+    const size_t modifierCount = sizeof(kTUCModifierKeys) / sizeof(kTUCModifierKeys[0]);
+
+    // Hold each one down, building up the flags as a real keyboard would.
+    CGEventFlags asserted = 0;
+    for (size_t i = 0; i < modifierCount; i++) {
+        if ((modifiers & kTUCModifierKeys[i].flag) == 0) continue;
+        asserted |= kTUCModifierKeys[i].flag;
+        [self postModifierKey:kTUCModifierKeys[i].key remainingFlags:asserted down:YES];
+    }
+
     CGEventRef keyDown = CGEventCreateKeyboardEvent(NULL, keyCode, true);
     CGEventSetFlags(keyDown, modifiers);
     [self postSyntheticEvent:keyDown];
@@ -938,6 +990,14 @@ static NSTimeInterval TUCMomentumDurationForSpeed(CGFloat initialSpeed) {
     CGEventSetFlags(keyUp, modifiers);
     [self postSyntheticEvent:keyUp];
     CFRelease(keyUp);
+
+    // And let each one go again, in reverse, so the last thing the window server is told is that
+    // nothing is held. This is the half that was missing.
+    for (size_t i = modifierCount; i-- > 0; ) {
+        if ((modifiers & kTUCModifierKeys[i].flag) == 0) continue;
+        asserted &= ~kTUCModifierKeys[i].flag;
+        [self postModifierKey:kTUCModifierKeys[i].key remainingFlags:asserted down:NO];
+    }
 }
 
 
