@@ -8,8 +8,21 @@
 import SwiftUI
 import TouchUpCore
 
+/**
+ What is left to decide.
+
+ There used to be a section here for gestures, with a picker for what one finger does, another for
+ what two do, and eight switches besides. All of it is gone, and none of it was replaced by a
+ preference somewhere else: a tap clicks, a finger scrolls what it is on and drags what can be
+ dragged, holding opens the menu, two fingers drag, pinching zooms, three sweep between desktops.
+ A tablet does not ask, and neither does this.
+
+ What survives is what Touch Up cannot work out for itself — which panel is which display, and how
+ the glass is oriented on it — plus two deployment choices and the things you reach for when a
+ screen misbehaves.
+ */
 struct SettingsView: View {
-    
+
     @ObservedObject var model: TouchUp
 
     @State private var didCopyDiagnostics = false
@@ -22,119 +35,25 @@ struct SettingsView: View {
                     .font(.largeTitle)
                 Text("Touch Up converts USB HID data from any Windows certified touchscreen to mouse events.\nInjecting mouse events requires access to accessibility APIs. You can allow this by clicking the button below.")
             }
-            
+
             HStack {
                 Spacer()
                 Button {
                     model.grantAccessibilityAccess()
                 } label: {
-                    
                     Text("Grant Accessibility Access")
                 }
                 .buttonStyle(BorderedProminentButtonStyle())
             }
         }
     }
-    
+
+
     var top: some View {
         Toggle(model.uiLabels(for: \.isPublishingMouseEventsEnabled).title, isOn: $model.isPublishingMouseEventsEnabled)
     }
 
-    
-    var tabletModeRow: some View {
-        HStack(alignment: .top) {
-            SettingsExplanationLabel(labels: ("iPad Mode",
-                                              "One finger scrolls, a tap clicks, holding opens the right-click menu, two fingers drag, and pinch zooms — with no mouse pointer. Sets the options below; you can still change any of them afterwards."))
 
-            Spacer(minLength: 8)
-
-            if model.isTabletModeActive {
-                Label("Active", systemImage: "checkmark.circle.fill")
-                    .foregroundColor(.accentColor)
-                    .font(.caption)
-            } else {
-                Button("Use iPad Mode") { model.activateTabletMode() }
-                    .font(.caption)
-            }
-        }
-    }
-
-
-    var gestureSettings: some View {
-        Group {
-            tabletModeRow
-
-            
-            let mode_ = Binding {
-                if model.isClickOnLiftEnabled { return 2 }
-                if model.isDraggingWithOneFingerEnabled { return 3 }
-                return model.isScrollingWithOneFingerEnabled ? 0 : 1
-            } set: { value in
-                model.isScrollingWithOneFingerEnabled = value == 0
-                model.isClickOnLiftEnabled = value == 2
-                model.isDraggingWithOneFingerEnabled = value == 3
-            }
-
-            Picker(selection: mode_) {
-                Text("Scroll").tag(0)
-                Text("Move Cursor").tag(1)
-                Text("Point and Click").tag(2)
-                Text("Drag").tag(3)
-            } label: {
-                SettingsExplanationLabel(labels: ("On Finger Drag", "Specify which action should occur when dragging one finger on the touch screen. If you set this to \"Drag\", set Two Finger Drag to \"Scroll\" so that scrolling is still reachable."))
-            }
-
-            
-            Picker(selection: $model.twoFingerDragAction) {
-                Text("Drag").tag(TwoFingerDragAction.drag)
-                Text("Scroll").tag(TwoFingerDragAction.scroll)
-                Text("Nothing").tag(TwoFingerDragAction.nothing)
-            } label: {
-                SettingsExplanationLabel(labels: model.uiLabels(for: \.twoFingerDragAction))
-            }
-
-
-            Toggle(isOn: $model.isSystemSwipeEnabled) {
-                SettingsExplanationLabel(labels: model.uiLabels(for: \.isSystemSwipeEnabled))
-            }
-
-            Toggle(isOn: $model.isMagnificationEnabled) {
-                SettingsExplanationLabel(labels: model.uiLabels(for: \.isMagnificationEnabled))
-            }
-            
-            Toggle(isOn: $model.isLongPressContextMenuEnabled) {
-                SettingsExplanationLabel(labels: model.uiLabels(for: \.isLongPressContextMenuEnabled))
-            }
-
-            Toggle(isOn: $model.isCursorHiddenEnabled) {
-                SettingsExplanationLabel(labels: model.uiLabels(for: \.isCursorHiddenEnabled))
-            }
-
-            Toggle(isOn: $model.isClickWindowToFrontEnabled) {
-                SettingsExplanationLabel(labels: model.uiLabels(for: \.isClickWindowToFrontEnabled))
-            }
-        }
-    }
-    
-    
-    /// Its own section for the same reason the keyboard has one: the Gestures group is one child away
-    /// from the ten a `ViewBuilder` will take, and adding an eleventh breaks in a way that reads as
-    /// unrelated to whatever was being added.
-    ///
-    /// It also belongs apart on its own merits. Everything under Gestures answers "what should this
-    /// gesture do"; this answers "should that depend on where you did it", which is a question about
-    /// all of them at once.
-    var surfaceSettings: some View {
-        Group {
-            Toggle(isOn: $model.isSurfaceAwareGesturesEnabled) {
-                SettingsExplanationLabel(labels: model.uiLabels(for: \.isSurfaceAwareGesturesEnabled))
-            }
-        }
-    }
-
-
-    /// Its own section rather than another row under Gestures: a keyboard is not a gesture, and that
-    /// group is one child away from the ten a `ViewBuilder` will take.
     var keyboardSettings: some View {
         Group {
             Toggle(isOn: $model.isOnScreenKeyboardEnabled) {
@@ -149,56 +68,14 @@ struct SettingsView: View {
     }
 
 
-    var parameterSettings: some View {
-        Group {
-            // Reaches 0.8 s so a genuine long press is selectable at all: iPadOS uses about
-            // 0.5 s, and the old 0.16 s ceiling meant any unhurried tap counted as a hold.
-            Slider(value: $model.holdDuration, in: 0.0...0.8, step: 0.05){
-                SettingsExplanationLabel(labels: model.uiLabels(for: \.holdDuration))
-            }
-            
-            // Range starts at 1: a zero zone can never be satisfied. It reaches well past the
-            // default of 8 because the distance check used to be inert, so this is the first
-            // release where the ceiling actually binds — imprecise taps on a large panel need
-            // the headroom to keep double clicking.
-            Slider(value: $model.doubleClickDistance, in: 1...16, step: 1) {
-                SettingsExplanationLabel(labels: model.uiLabels(for: \.doubleClickDistance))
-            }
-
-            // Starts at 2 mm, because below that no real tap survives: a finger settling on the
-            // glass shifts the reported contact further than that on its own, so the touch becomes
-            // a scroll and never clicks. Reaches 16 because precision scales with the panel — a tap
-            // on a 32" display is nothing like a tap on a 7" one.
-            Slider(value: $model.tapDistance, in: 2...16, step: 0.5) {
-                SettingsExplanationLabel(labels: model.uiLabels(for: \.tapDistance))
-            }
-        }
-    }
-    
-    
     var troubleshootingSettings: some View {
         Group {
-            let errorResistance_ = Binding {Double(model.errorResistance)} set: {
-                model.errorResistance = NSInteger(Int($0)) }
-            
-            Slider(value: errorResistance_ , in: 0...10, step: 1) {
-                SettingsExplanationLabel(labels: model.uiLabels(for: \.errorResistance))
-            }
-            
-            Toggle(isOn: $model.ignoreOriginTouches) {
-                SettingsExplanationLabel(labels: model.uiLabels(for: \.ignoreOriginTouches))
-            }
-
-            Toggle(isOn: $model.areAdditionalDigitizerRotationSettingsVisible) {
-                SettingsExplanationLabel(labels: model.uiLabels(for: \.areAdditionalDigitizerRotationSettingsVisible))
+            Toggle(isOn: $model.isKioskModeEnabled) {
+                SettingsExplanationLabel(labels: model.uiLabels(for: \.isKioskModeEnabled))
             }
 
             Toggle(isOn: $model.isExclusiveAccessEnabled) {
                 SettingsExplanationLabel(labels: model.uiLabels(for: \.isExclusiveAccessEnabled))
-            }
-
-            Toggle(isOn: $model.isGestureInspectorEnabled) {
-                SettingsExplanationLabel(labels: model.uiLabels(for: \.isGestureInspectorEnabled))
             }
 
             diagnosticsButton
@@ -227,8 +104,8 @@ struct SettingsView: View {
         .onChange(of: model.connectedDigitizers) { _ in didCopyDiagnostics = false }
         .onChange(of: model.connectedScreens) { _ in didCopyDiagnostics = false }
     }
-    
-    
+
+
     var footer: some View {
         HStack {
             Spacer()
@@ -240,7 +117,7 @@ struct SettingsView: View {
 
                 Text("Made with 🐑 in Aachen")
                     .font(.footnote)
-                
+
                 Link(destination: URL(string: "https://github.com/shueber/Touch-Up")!, label: {
                     Label("GitHub", systemImage: "link")
                         .foregroundColor(.accentColor)
@@ -251,144 +128,54 @@ struct SettingsView: View {
         }
         .font(.footnote)
         .foregroundColor(.secondary)
-        
     }
-    
-    var container: some View {
-        if #available(macOS 13.0, *) {
-            return Form {
-                if !model.isAccessibilityAccessGranted {
-                    Section {
-                        welcomeBanner
-                    } footer: {
-                        Rectangle()
-                            .frame(width:0, height:0)
-                            .foregroundColor(.clear)
-                    }
 
-                }
-                
+
+    var body: some View {
+        Form {
+            if !model.isAccessibilityAccessGranted {
                 Section {
-                    top
-                }
-
-                Section("Touchscreens") {
-                    DigitizerMappingView(model: self.model)
-                }
-
-                Section("Gestures") {
-                    gestureSettings
-                }
-
-                Section("Surfaces") {
-                    surfaceSettings
-                }
-
-                Section("Keyboard") {
-                    keyboardSettings
-                }
-
-                Section("Parameters") {
-                    parameterSettings
-                }
-
-                Section {
-                    troubleshootingSettings
-                } header: {
-                    Text("Troubleshooting")
+                    welcomeBanner
                 } footer: {
-                    footer
+                    Rectangle()
+                        .frame(width: 0, height: 0)
+                        .foregroundColor(.clear)
                 }
-
-
-
             }
-            .formStyle(.grouped)
 
-        } else {
-            return List {
-                LegacySection {
-                    top
-                }
+            Section {
+                top
+            }
 
-                LegacySection(title: "Touchscreens") {
-                    DigitizerMappingView(model: self.model)
-                }
+            Section("Touchscreens") {
+                DigitizerMappingView(model: self.model)
+            }
 
-                LegacySection(title: "Gestures") {
-                    gestureSettings
-                }
+            Section("Keyboard") {
+                keyboardSettings
+            }
 
-                LegacySection(title: "Surfaces") {
-                    surfaceSettings
-                }
-
-                LegacySection(title: "Keyboard") {
-                    keyboardSettings
-                }
-
-                LegacySection(title: "Parameters") {
-                    parameterSettings
-                }
-                
-                LegacySection(title: "Troubleshooting") {
-                    troubleshootingSettings
-                }
-                
+            Section {
+                troubleshootingSettings
+            } header: {
+                Text("Troubleshooting")
+            } footer: {
                 footer
-                
             }
-            .toggleStyle(.switch)
-            
         }
-    }
-    
-    
-    
-    var body: some View {
-        container
+        .formStyle(.grouped)
         .frame(minWidth: 480, idealWidth: 660, maxWidth: .infinity,
-               minHeight: 400, idealHeight: 760, maxHeight: .infinity)
-        
-    }
-}
-
-
-struct LegacySection<Content: View>: View {
-    var title: String? = nil
-    var content: () -> Content
-    
-    var body: some View {
-        VStack(alignment: .leading) {
-            if let title = title {
-                Text(title)
-                    .font(.headline)
-                    .padding(.horizontal, 12)
-            }
-            
-            ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .foregroundColor(.secondary.opacity(0.1))
-                    .shadow(radius: 1)
-                    
-                    
-                
-                VStack(alignment: .leading, spacing: 16, content: content)
-                    .padding(12)
-            }
-            
-        }
-        .padding(.bottom)
+               minHeight: 400, idealHeight: 620, maxHeight: .infinity)
     }
 }
 
 
 struct SettingsExplanationLabel: View {
-    
-    let labels: (title:String, description:String)
-    
+
+    let labels: (title: String, description: String)
+
     var body: some View {
-        VStack(alignment:.leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(labels.title)
             Text(labels.description)
                 .foregroundColor(.secondary)
@@ -396,7 +183,6 @@ struct SettingsExplanationLabel: View {
         }
     }
 }
-
 
 
 struct SettingsView_Previews: PreviewProvider {

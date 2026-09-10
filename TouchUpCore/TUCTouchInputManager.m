@@ -1607,42 +1607,163 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
  would mean a second delegate round trip per report, in the one path where per-report cost is the
  thing this file is most careful about.
  */
-- (TUCCursorAction)actionForGesture:(TUCCursorGesture)gesture atScreenLocation:(CGPoint)screenLocation {
+/**
+ Whether this surface has been established well enough to press the mouse button on it.
 
-    // The richer question first, and only one of the two is ever asked. A delegate that answers it
-    // has taken over the mapping entirely; falling through to `-actionForGesture:` as well would
-    // mean two answers to the same question with no rule about which wins.
-    if ([self.delegate respondsToSelector:@selector(actionForGesture:inContext:)]) {
-        return [self.delegate actionForGesture:gesture
-                                    inContext:[self gestureContextAtScreenLocation:screenLocation]];
+ The asymmetry this protects is what makes deciding early safe at all: a wrong scroll costs a few
+ pixels the user scrolls back, while a wrong drag picks up a file, selects text, or moves a window
+ — something they have to notice and undo. So a guess about what is *inside* a window may only ever
+ suppress scrolling, never start a drag: a window with no accessibility support is
+ indistinguishable from a full-screen game, and the top of a game is not a handle.
+
+ Two surfaces are exceptions, and neither is a guess about the inside of a window.
+
+ The desktop is established by there being no window under the finger at all, which the window list
+ knows for certain without asking anybody — and a game is a window, so a game can never be mistaken
+ for it.
+
+ Window chrome has to be one too, for a blunter reason: **a title bar has no accessibility element
+ in most applications**, so asking for one is asking for something that will never arrive.
+ Requiring it meant chrome always fell through to scrolling, and windows could not be moved or
+ resized at all. What keeps a full-screen game safe is not this check but the one in
+ `-windowSurfaceForPoint:locationID:`, which refuses to claim a handle anywhere on a window that
+ fills its display.
+ */
+- (BOOL)canStartDragInContext:(TUCGestureContext *)context {
+    switch (context.surface) {
+        case TUCSurfaceKindDesktop:
+        case TUCSurfaceKindWindowChrome:
+            return YES;
+        default:
+            return context.surfaceSource == TUCSurfaceSourceAXElement;
+    }
+}
+
+
+/// What one finger moving should do on this surface.
+- (TUCCursorAction)dragActionInContext:(TUCGestureContext *)context {
+    switch (context.surface) {
+        case TUCSurfaceKindScrollArea:
+            return TUCCursorActionScroll;
+
+        // A slider, a title bar, an icon on the desktop: things a finger moves directly. Scrolling
+        // a slider does nothing at all, so falling back here is not merely different but useless.
+        case TUCSurfaceKindControl:
+        case TUCSurfaceKindDesktop:
+        case TUCSurfaceKindWindowChrome:
+            return [self canStartDragInContext:context] ? TUCCursorActionDrag : TUCCursorActionScroll;
+
+        // Read successfully and it is nothing in particular, or not read at all. Either way one
+        // finger scrolls, which is what one finger does on a tablet.
+        //
+        // This is also where a still-pending answer lands, and it must: an answer that has been
+        // asked for and not yet arrived may narrow what happens, never widen it. Without that a
+        // flick quick enough to outrun the probe would drag, and only a slow one — one that gave
+        // the probe time to answer — would scroll, which reads exactly as "scrolling only works
+        // if I hold still first".
+        case TUCSurfaceKindContent:
+        case TUCSurfaceKindTextArea:
+        case TUCSurfaceKindUnknown:
+            return TUCCursorActionScroll;
+    }
+}
+
+
+/// What holding still should do on this surface.
+- (TUCCursorAction)longPressActionInContext:(TUCGestureContext *)context {
+    switch (context.surface) {
+        case TUCSurfaceKindTextArea:
+            // Hold, then move, selects text — the movement arrives as `HoldAndDrag` and takes the
+            // button with it. Hold, then lift, closes a drag that never moved, which is a click.
+            return TUCCursorActionDrag;
+
+        case TUCSurfaceKindWindowChrome:
+        case TUCSurfaceKindControl:
+            // A menu here would steal the drag the user was starting off the title bar or the thumb.
+            return TUCCursorActionNone;
+
+        default:
+            // What a long press does on a tablet.
+            return TUCCursorActionSecondaryClick;
+    }
+}
+
+
+/**
+ The mapping, and the whole of it.
+
+ One finger scrolls what it is on and drags what can be dragged; holding still opens the context
+ menu; two fingers drag; pinching zooms; three sweep between desktops. There is deliberately no way
+ to change any of it — see `-actionForGesture:` in the delegate protocol for why the hook to do so
+ was removed rather than kept unused.
+ */
+- (TUCCursorAction)builtInActionForGesture:(TUCCursorGesture)gesture
+                                 inContext:(TUCGestureContext *)context {
+    // Nothing on the glass may be scrolled, dragged, zoomed or held — only pointed at and clicked.
+    // Checked ahead of everything because overriding all of it is the whole of its job.
+    if (self.kioskMode) {
+        switch (gesture) {
+            case TUCCursorGestureTouchDown: return TUCCursorActionMoveClickIfNeeded;
+            case TUCCursorGestureDrag:      return TUCCursorActionPointAndClick;
+            case TUCCursorGestureTap:       return TUCCursorActionClick;
+            default:                        return TUCCursorActionNone;
+        }
     }
 
-    // The original contract, unchanged. `TouchUpCore` ships as a framework, so this is somebody
-    // else's code as far as this file is concerned.
-    if (self.delegate != nil) {
+    switch (gesture) {
+        // Moves the pointer under the finger, and brings the owning application forward if it was
+        // not already. The tap's own click follows on lift-off and lands on a window that is
+        // active by then, so one tap both focuses and actuates.
+        case TUCCursorGestureTouchDown:     return TUCCursorActionMoveClickIfNeeded;
+
+        case TUCCursorGestureTap:           return TUCCursorActionClick;
+
+        // Posted as soon as a finger has held still long enough, with the finger still down — not
+        // on the lift.
+        case TUCCursorGestureLongPress:     return [self longPressActionInContext:context];
+
+        case TUCCursorGestureDrag:          return [self dragActionInContext:context];
+
+        // The movement after a hold. Whatever the hold started — a text selection, picking
+        // something up — this carries on.
+        case TUCCursorGestureHoldAndDrag:   return TUCCursorActionDrag;
+
+        // Not a tablet gesture, but dragging has to live somewhere: it is the only way to pan a
+        // map, move a window, work a slider or select text where the surface could not be read,
+        // and one finger is already spoken for.
+        case TUCCursorGestureTwoFingerDrag: return TUCCursorActionDrag;
+
+        case TUCCursorGesturePinch:         return TUCCursorActionMagnify;
+
+        // Sweeping three fingers, matching the trackpad pane's own directions: the space follows
+        // your fingers off the screen, up reveals Mission Control, down the app's windows.
+        case TUCCursorGestureSwipeLeft:     return TUCCursorActionSpaceNext;
+        case TUCCursorGestureSwipeRight:    return TUCCursorActionSpacePrevious;
+        case TUCCursorGestureSwipeUp:       return TUCCursorActionMissionControl;
+        case TUCCursorGestureSwipeDown:     return TUCCursorActionApplicationWindows;
+
+        case _TUCCursorGestureNone:         return TUCCursorActionNone;
+    }
+}
+
+
+- (TUCCursorAction)actionForGesture:(TUCCursorGesture)gesture atScreenLocation:(CGPoint)screenLocation {
+    TUCGestureContext *context = [self gestureContextAtScreenLocation:screenLocation];
+
+    // The richer question first, and exactly one of the three is ever asked. A delegate that
+    // answers either has taken over the mapping entirely; falling through as well would mean two
+    // answers to the same question with no rule about which wins.
+    if ([self.delegate respondsToSelector:@selector(actionForGesture:inContext:)]) {
+        return [self.delegate actionForGesture:gesture inContext:context];
+    }
+
+    // The original contract, still honoured. `TouchUpCore` ships as a framework, so this is
+    // somebody else's code as far as this file is concerned.
+    if ([self.delegate respondsToSelector:@selector(actionForGesture:)]) {
         return [self.delegate actionForGesture:gesture];
     }
 
-    switch(gesture) {
-        case TUCCursorGestureTouchDown:         return TUCCursorActionMoveClickIfNeeded;
-        case TUCCursorGestureTap:               return TUCCursorActionClick;
-        // Nothing by default: the lift-off already produces the click, and pressing here too
-        // would actuate the touch twice. Map it to a drag to hold the button for as long as
-        // the finger rests instead.
-        case TUCCursorGestureLongPress:         return TUCCursorActionNone;
-        case TUCCursorGestureDrag:              return TUCCursorActionScroll;
-        case TUCCursorGestureHoldAndDrag:       return TUCCursorActionDrag;
-        case TUCCursorGestureTwoFingerDrag:     return TUCCursorActionDrag;
-            
-        case TUCCursorGesturePinch:             return TUCCursorActionMagnify;
-
-        case TUCCursorGestureSwipeLeft:         return TUCCursorActionSpaceNext;
-        case TUCCursorGestureSwipeRight:        return TUCCursorActionSpacePrevious;
-        case TUCCursorGestureSwipeUp:           return TUCCursorActionMissionControl;
-        case TUCCursorGestureSwipeDown:         return TUCCursorActionApplicationWindows;
-
-        case _TUCCursorGestureNone:             return TUCCursorActionNone;
-    }
+    return [self builtInActionForGesture:gesture inContext:context];
 }
 
 
@@ -2145,12 +2266,47 @@ static const CGFloat kResizeBorderWidth = 8.0;
         self.recentGestureLog = [NSMutableArray new];
         self.identifiedMultitouchGesture = _TUCCursorGestureNone;
 
-        self.doubleClickTolerance = 5;
-        self.tapTolerance = 2.5;
-        self.holdDuration = 0.08;
-        self.errorResistance = 0;
-        
-        self.ignoreOriginTouches = NO;
+        // Knowing what is under the finger is what the built-in mapping is built on, so it is
+        // asked for by default rather than opted into.
+        self.classifiesSurfaces = YES;
+        self.kioskMode = NO;
+
+        // There is no pointer on a tablet. Assigned to the ivar rather than through the setter on
+        // purpose: the setter hides the pointer there and then, which at launch would take it away
+        // from somebody who has not touched anything and may not even have a touchscreen plugged
+        // in. This arms the behaviour instead — the first touch on the glass hides it, moving a
+        // mouse brings it straight back, and the next touch hides it again.
+        _hidesCursor = YES;
+
+        // The timings and distances are part of the behaviour, not incidental tuning: whether a
+        // touch is a tap at all is decided by `tapTolerance` and `holdDuration`, and a value
+        // tuned for a phone makes an ordinary tap on a wall-sized panel land as a scroll or a
+        // long press instead.
+
+        // Two taps this far apart still count as a double click. Generous, because pointing
+        // precision scales with the panel.
+        self.doubleClickTolerance = 8;
+
+        // How far a finger may slide and still be a tap. Anything past it is a scroll, and a
+        // scroll produces no click. Wide enough to absorb a finger settling on the glass, narrow
+        // enough that scrolling still starts where you expect it to. Below about 2 mm no real tap
+        // survives at all: settling shifts the reported contact further than that on its own.
+        self.tapTolerance = 3;
+
+        // Long enough that an ordinary tap cannot reach it. iPadOS uses about half a second, but
+        // a tap there is a thumb on a handheld screen; reaching out to a wall-sized panel and
+        // lifting again takes longer, and a tap that overruns becomes a context menu — which on
+        // most controls shows nothing at all, so it reads as the click having been ignored.
+        self.holdDuration = 0.7;
+
+        // Reports a contact may go missing for before it is given up on. Panels drop reports;
+        // this is the tolerance that keeps a touch alive across the gap.
+        self.errorResistance = 4;
+
+        // Some panels emit spurious contacts at (0,0), which without this drag every touch to the
+        // corner of the screen. Harmless on a panel that does not: a real touch exactly on the
+        // origin pixel is not a thing anybody does deliberately.
+        self.ignoreOriginTouches = YES;
     }
     return self;
 }

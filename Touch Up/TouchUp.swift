@@ -21,29 +21,20 @@ class TouchUp: NSObject, ObservableObject {
     
     @Published var connectionState: ConnectionState = .disconnected
     
-    @Published var holdDuration: TimeInterval = 0.1
-    @Published var doubleClickDistance: CGFloat = 3 //mm
-    @Published var tapDistance: CGFloat = 2.5 //mm
-    @Published var errorResistance: NSInteger = 0 // num of Reports to wait before cancelling a touch
-    @Published var ignoreOriginTouches: Bool = false
-    
-    @Published var isScrollingWithOneFingerEnabled = false
-    @Published var isMagnificationEnabled = false
-    @Published var isClickWindowToFrontEnabled = false
-    @Published var isClickOnLiftEnabled = false
-    @Published var isDraggingWithOneFingerEnabled = false
-    @Published var isLongPressContextMenuEnabled = false
+    /// Reduces the glass to pointing and clicking, for a machine left in front of the public.
+    /// A deployment decision rather than a preference, which is why it is the one thing about
+    /// what a gesture means that is still adjustable.
+    @Published var isKioskModeEnabled = false
+
+    /// Take the touchscreen away from macOS, for panels it also tries to handle itself.
     @Published var isExclusiveAccessEnabled = false
-    @Published var isCursorHiddenEnabled = false
-    @Published var twoFingerDragAction: TwoFingerDragAction = .drag
-    @Published var isSystemSwipeEnabled = true
-    @Published var isSurfaceAwareGesturesEnabled = false
-    @Published var isGestureInspectorEnabled = false
 
     @Published var isOnScreenKeyboardEnabled = false
     @Published var isKeyboardAutoShowEnabled = false
 
-    @Published var areAdditionalDigitizerRotationSettingsVisible = false
+    /// A live readout of what each touch was taken to be. No settings row: it is a tool for
+    /// working out why a gesture went the wrong way, reached by setting the default by hand.
+    @Published var isGestureInspectorEnabled = UserDefaults.standard.bool(forKey: "isGestureInspectorEnabled")
 
 
     @Published var connectedScreens = [TUCScreen]()
@@ -136,86 +127,6 @@ class TouchUp: NSObject, ObservableObject {
         return String(cString: bytes)
     }
 
-    /// Whether the settings currently add up to the tablet-like combination below. Derived rather
-    /// than stored, so changing any one of the individual toggles simply drops out of the preset
-    /// instead of leaving a stored flag disagreeing with what the app actually does.
-    var isTabletModeActive: Bool {
-        isScrollingWithOneFingerEnabled
-            && isLongPressContextMenuEnabled
-            && isMagnificationEnabled
-            && isCursorHiddenEnabled
-            && isSystemSwipeEnabled
-            && twoFingerDragAction == .drag
-            && !isClickOnLiftEnabled
-            && !isDraggingWithOneFingerEnabled
-            && isClickWindowToFrontEnabled
-            && isOnScreenKeyboardEnabled
-            && isKeyboardAutoShowEnabled
-            && isSurfaceAwareGesturesEnabled
-            && holdDuration >= Self.tabletModeHoldDuration
-            && tapDistance >= Self.tabletModeTapDistance
-    }
-
-    /// Long enough that an ordinary tap cannot reach it. iPadOS uses about half a second, but a
-    /// tap there is a thumb on a handheld screen; reaching out to a wall-sized panel and lifting
-    /// again takes longer, and a tap that overruns becomes a context menu — which on most controls
-    /// shows nothing at all, so it reads as the click having been ignored.
-    static let tabletModeHoldDuration: TimeInterval = 0.7
-
-    /// How far a finger may slide and still be a tap. Anything past it is a scroll, and a scroll
-    /// produces no click. Wide enough to absorb a finger settling on the glass, narrow enough that
-    /// scrolling still starts where you expect it to.
-    static let tabletModeTapDistance: CGFloat = 3
-
-    /// Two taps this far apart still count as a double click. Generous, because pointing precision
-    /// scales with the panel.
-    static let tabletModeDoubleClickDistance: CGFloat = 8
-
-    /// Every setting that decides how the glass behaves, put where a tablet would have it.
-    ///
-    /// The timings and distances are part of the mode, not incidental tuning: whether a touch is a
-    /// tap at all is decided by `tapDistance` and `holdDuration`, and a value tuned for a phone
-    /// makes an ordinary tap on a wall-sized panel land as a scroll or a long press instead.
-    func activateTabletMode() {
-        // One finger moves the content, as on a tablet. Never the pointer, never a button.
-        isScrollingWithOneFingerEnabled = true
-        isClickOnLiftEnabled = false
-        isDraggingWithOneFingerEnabled = false
-
-        // Two fingers hold the button down. Not a tablet gesture, but dragging has to live
-        // somewhere: it is the only way to pan a map, move a window, work a slider or select text,
-        // and one finger is already spoken for.
-        twoFingerDragAction = .drag
-
-        // Holding still opens the context menu, which is what a long press does on a tablet.
-        isLongPressContextMenuEnabled = true
-
-        isMagnificationEnabled = true
-        isSystemSwipeEnabled = true
-        isCursorHiddenEnabled = true
-
-        // A tablet raises a keyboard when you tap somewhere you can type, and has no other one to
-        // fall back on.
-        isOnScreenKeyboardEnabled = true
-        isKeyboardAutoShowEnabled = true
-
-        // On: tapping an app that is not focused should focus it and act on what you touched, in
-        // one tap, which is what a tablet does. It was off while this worked by injecting a second
-        // click, which made that tap actuate twice on some controls; it now activates the owning
-        // application instead and leaves exactly one click.
-        isClickWindowToFrontEnabled = true
-
-        // One finger scrolling is the premise of the whole mode, and the one thing wrong with it on a
-        // Mac is that one finger then cannot move a window, drag a file out of a folder, or work a
-        // slider — none of which a tablet has this problem with, because a tablet knows what is under
-        // your finger. This is how that is answered.
-        isSurfaceAwareGesturesEnabled = true
-
-        holdDuration = Self.tabletModeHoldDuration
-        tapDistance = Self.tabletModeTapDistance
-        doubleClickDistance = Self.tabletModeDoubleClickDistance
-    }
-
     func copyDiagnosticsToClipboard() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(diagnosticsReport, forType: .string)
@@ -267,95 +178,35 @@ extension TouchUp {
     
     func initPreferences() {
         let defaults = UserDefaults.standard
-        
+
         defaults.register(defaults: [
-            "holdDuration" : 0.1,
-            "doubleClickDistance" : 8,
-            "tapDistance" : 2.5,
-            "errorResistance" : 4,
-            "ignoreOriginTouches" : true,
-
-            "isScrollingWithOneFingerEnabled" : true,
-            "isMagnificationEnabled" : true,
-            "isClickWindowToFrontEnabled" : false,
-            "isClickOnLiftEnabled" : false,
-            "isDraggingWithOneFingerEnabled" : false,
-            "isLongPressContextMenuEnabled" : false,
+            "isKioskModeEnabled" : false,
             "isExclusiveAccessEnabled" : false,
-            "isCursorHiddenEnabled" : false,
-            "twoFingerDragAction" : TwoFingerDragAction.drag.rawValue,
-            "isSystemSwipeEnabled" : true,
-            "isSurfaceAwareGesturesEnabled" : false,
-            "isGestureInspectorEnabled" : false,
-            "areAdditionalDigitizerRotationSettingsVisible" : false,
 
-            // Off by default. A machine with a keyboard attached does not want a second one taking up
-            // the bottom of the screen, and there is no way from here to tell whether one is attached.
+            // Off by default. A machine with a keyboard attached does not want a second one taking
+            // up the bottom of the screen.
             "isOnScreenKeyboardEnabled" : false,
             "isKeyboardAutoShowEnabled" : true
         ])
-        
-        holdDuration = defaults.double(forKey: "holdDuration")
-        // A zero zone means two taps can never be close enough to double click. It used to be
-        // selectable while the distance check was broken and therefore inert, so a stored 0 is
-        // not a deliberate choice — lift it to the smallest value the slider now offers.
-        doubleClickDistance = max(1, defaults.double(forKey: "doubleClickDistance"))
-        // Only the unusable floor is corrected here. Widening the default was a guess at why taps
-        // were not clicking, and the guess was wrong: the cause was a digitizer emitting spurious
-        // reports at the origin, which move the touch to the corner of the screen no matter how
-        // wide the zone is. A zone below 2 mm still cannot work, since a finger settling on the
-        // glass shifts the contact further than that, so those are lifted.
-        // Anything under 2 mm is smaller than the shift a finger makes just settling onto the
-        // glass, so every touch becomes a scroll and nothing ever clicks. It used to be selectable,
-        // so lift a stored value up rather than leaving someone stuck with a screen that ignores
-        // them. 2.5 was the old default and was never a deliberate choice either.
-        let storedTapDistance = defaults.double(forKey: "tapDistance")
-        tapDistance = (storedTapDistance < 2) ? 2.5 : storedTapDistance
-        errorResistance = defaults.integer(forKey: "errorResistance")
-        ignoreOriginTouches = defaults.bool(forKey: "ignoreOriginTouches")
 
-
-        self.observers = [
-            $isPublishingMouseEventsEnabled.assign(to: \.postMouseEvents, on: touchManager),
-            $holdDuration.assign(to: \.holdDuration, on: touchManager),
-            $doubleClickDistance.assign(to: \.doubleClickTolerance, on: touchManager),
-            $tapDistance.assign(to: \.tapTolerance, on: touchManager),
-            $errorResistance.assign(to: \.errorResistance, on: touchManager),
-            $ignoreOriginTouches.assign(to: \.ignoreOriginTouches, on: touchManager),
-            $isExclusiveAccessEnabled.sink { [weak self] enabled in
-                self?.touchManager.setTouchscreensSeized(enabled)
-            },
-            $isCursorHiddenEnabled.assign(to: \.hidesCursor, on: touchManager),
-            // Pushed rather than pulled per gesture, unlike every other behavioural setting here,
-            // because it is not a mapping: it decides whether the core asks what is under the finger
-            // at all. The same kind of switch as `postMouseEvents` and `hidesCursor`, which are
-            // pushed for the same reason. Left to be pulled, the core would have to run a window
-            // server round trip on every touchdown just to find out nobody wanted the answer.
-            $isSurfaceAwareGesturesEnabled.assign(to: \.classifiesSurfaces, on: touchManager)
-        ]
-        
-        
-        
-        isScrollingWithOneFingerEnabled = defaults.bool(forKey: "isScrollingWithOneFingerEnabled")
-        isMagnificationEnabled = defaults.bool(forKey: "isMagnificationEnabled")
-        isClickWindowToFrontEnabled = defaults.bool(forKey: "isClickWindowToFrontEnabled")
-        isClickOnLiftEnabled = defaults.bool(forKey: "isClickOnLiftEnabled")
-        isDraggingWithOneFingerEnabled = defaults.bool(forKey: "isDraggingWithOneFingerEnabled")
-        isLongPressContextMenuEnabled = defaults.bool(forKey: "isLongPressContextMenuEnabled")
+        isKioskModeEnabled = defaults.bool(forKey: "isKioskModeEnabled")
         isExclusiveAccessEnabled = defaults.bool(forKey: "isExclusiveAccessEnabled")
-        isCursorHiddenEnabled = defaults.bool(forKey: "isCursorHiddenEnabled")
-        twoFingerDragAction = TwoFingerDragAction(rawValue: defaults.integer(forKey: "twoFingerDragAction")) ?? .drag
-        isSystemSwipeEnabled = defaults.bool(forKey: "isSystemSwipeEnabled")
-        isSurfaceAwareGesturesEnabled = defaults.bool(forKey: "isSurfaceAwareGesturesEnabled")
-        isGestureInspectorEnabled = defaults.bool(forKey: "isGestureInspectorEnabled")
-        areAdditionalDigitizerRotationSettingsVisible = defaults.bool(forKey: "areAdditionalDigitizerRotationSettingsVisible")
         isOnScreenKeyboardEnabled = defaults.bool(forKey: "isOnScreenKeyboardEnabled")
         isKeyboardAutoShowEnabled = defaults.bool(forKey: "isKeyboardAutoShowEnabled")
 
-        // The watcher costs a read every 0.4 s while it runs, so it only runs when both the keyboard
-        // and its automatic side are wanted. Put the keyboard away when the feature is turned off,
-        // rather than leaving one on screen that nothing can now close.
-        self.observers.append(contentsOf: [
+        // Everything that decides what a gesture *means* now lives in the core and cannot be
+        // changed from here, so what is left to push is only the handful of switches that are
+        // about the machine rather than about the behaviour.
+        self.observers = [
+            $isPublishingMouseEventsEnabled.assign(to: \.postMouseEvents, on: touchManager),
+            $isKioskModeEnabled.assign(to: \.kioskMode, on: touchManager),
+            $isExclusiveAccessEnabled.sink { [weak self] enabled in
+                self?.touchManager.setTouchscreensSeized(enabled)
+            },
+
+            // The watcher costs a read every 0.4 s while it runs, so it only runs when both the
+            // keyboard and its automatic side are wanted. Put the keyboard away when the feature
+            // is turned off, rather than leaving one on screen that nothing can now close.
             Publishers.CombineLatest($isOnScreenKeyboardEnabled, $isKeyboardAutoShowEnabled)
                 .sink { [weak self] isEnabled, isAutomatic in
                     self?.keyboard.isAutomatic = isEnabled && isAutomatic
@@ -365,32 +216,15 @@ extension TouchUp {
             $isGestureInspectorEnabled.sink { [weak self] isEnabled in
                 self?.gestureInspector.isEnabled = isEnabled
             }
-        ])
+        ]
     }
-    
-    
+
+
     func savePreferences() {
         let defaults = UserDefaults.standard
-        
-        defaults.set(holdDuration, forKey: "holdDuration")
-        defaults.set(doubleClickDistance, forKey: "doubleClickDistance")
-        defaults.set(tapDistance, forKey: "tapDistance")
-        defaults.set(errorResistance, forKey: "errorResistance")
-        defaults.set(ignoreOriginTouches, forKey: "ignoreOriginTouches")
 
-        defaults.set(isScrollingWithOneFingerEnabled, forKey: "isScrollingWithOneFingerEnabled")
-        defaults.set(isMagnificationEnabled, forKey: "isMagnificationEnabled")
-        defaults.set(isClickWindowToFrontEnabled, forKey: "isClickWindowToFrontEnabled")
-        defaults.set(isClickOnLiftEnabled, forKey: "isClickOnLiftEnabled")
-        defaults.set(isDraggingWithOneFingerEnabled, forKey: "isDraggingWithOneFingerEnabled")
-        defaults.set(isLongPressContextMenuEnabled, forKey: "isLongPressContextMenuEnabled")
+        defaults.set(isKioskModeEnabled, forKey: "isKioskModeEnabled")
         defaults.set(isExclusiveAccessEnabled, forKey: "isExclusiveAccessEnabled")
-        defaults.set(isCursorHiddenEnabled, forKey: "isCursorHiddenEnabled")
-        defaults.set(twoFingerDragAction.rawValue, forKey: "twoFingerDragAction")
-        defaults.set(isSystemSwipeEnabled, forKey: "isSystemSwipeEnabled")
-        defaults.set(isSurfaceAwareGesturesEnabled, forKey: "isSurfaceAwareGesturesEnabled")
-        defaults.set(isGestureInspectorEnabled, forKey: "isGestureInspectorEnabled")
-        defaults.set(areAdditionalDigitizerRotationSettingsVisible, forKey: "areAdditionalDigitizerRotationSettingsVisible")
         defaults.set(isOnScreenKeyboardEnabled, forKey: "isOnScreenKeyboardEnabled")
         defaults.set(isKeyboardAutoShowEnabled, forKey: "isKeyboardAutoShowEnabled")
     }
@@ -574,188 +408,6 @@ extension TouchUp: TUCTouchDelegate {
         keyboard.lastTouchedScreenDidChange()
     }
 
-    /// What a gesture should do, given where it happened.
-    ///
-    /// Every branch that does not recognise its surface — and every surface that could not be read —
-    /// defers to `action(for:)` below rather than repeating it. That is the whole of the guarantee
-    /// that turning surface awareness off, or touching an application that cannot be read, behaves
-    /// exactly as it did before this existed: there is no second copy of the mapping to drift.
-    ///
-    /// Only one-finger gestures consult the surface. Two fingers, or three, are a gesture of the hand
-    /// and mean the same thing wherever they land: two fingers on a slider still scroll, and three on
-    /// a title bar still switch desktop. The context is passed for all of them so an integrator can
-    /// do otherwise, but nothing here reads it for them.
-    func action(for gesture: TUCCursorGesture, in context: TUCGestureContext) -> TUCCursorAction {
-        guard isSurfaceAwareGesturesEnabled else { return action(for: gesture) }
-
-        switch gesture {
-        case .TUCCursorGestureDrag:
-            // Point and Click is the exhibit setting: it exists so that nothing on the screen can be
-            // dragged or scrolled by a visitor, and overriding everything is the whole of its job.
-            if isClickOnLiftEnabled { return .pointAndClick }
-            return dragAction(on: context)
-
-        case .TUCCursorGestureLongPress:
-            return longPressAction(on: context)
-
-        default:
-            return action(for: gesture)
-        }
-    }
-
-
-    /// What one finger moving should do on this surface.
-    private func dragAction(on context: TUCGestureContext) -> TUCCursorAction {
-        switch context.surface {
-        case .scrollArea:
-            return .scroll
-
-        case .control:
-            // Scrolling a slider does nothing at all, so this is the one case where falling back to
-            // the global setting is not merely different but useless.
-            return canStartDrag(on: context) ? .drag : action(for: .TUCCursorGestureDrag)
-
-        case .desktop, .windowChrome:
-            return canStartDrag(on: context) ? .drag : action(for: .TUCCursorGestureDrag)
-
-        // Read successfully, and it is nothing in particular — so the setting is the best answer
-        // there is. Kept separate from `.unknown` all the same: one of them is an answer.
-        case .content, .textArea, .unknown:
-            return settledDragAction(on: context)
-
-        @unknown default:
-            return settledDragAction(on: context)
-        }
-    }
-
-
-    /// What the settings say one finger should do, held back from pressing the button while an answer
-    /// about the surface is still on its way.
-    ///
-    /// The asymmetry is the whole reason this feature can decide before it knows: a wrong scroll costs
-    /// a few pixels the user scrolls back, while a wrong drag selects text, picks up a file, or moves
-    /// a window — something they have to notice and undo. So an answer that has been asked for and not
-    /// yet arrived may narrow what happens, never widen it.
-    ///
-    /// Without this, a flick that outran the probe fell straight through to the setting. With the
-    /// setting on *Drag* that meant a quick flick dragged and only a slow one — one that gave the
-    /// probe time to answer `scrollArea` — scrolled, which reads exactly as "scrolling only works if
-    /// I hold still first".
-    ///
-    /// Only `pending` is held back. An application that cannot be read at all reports `unavailable`,
-    /// and there the setting is the best and final answer.
-    private func settledDragAction(on context: TUCGestureContext) -> TUCCursorAction {
-        let settled = action(for: .TUCCursorGestureDrag)
-        guard context.surfaceState == .pending, settled == .drag else { return settled }
-        return .scroll
-    }
-
-
-    /// What holding still and then lifting should do on this surface.
-    private func longPressAction(on context: TUCGestureContext) -> TUCCursorAction {
-        switch context.surface {
-        case .textArea:
-            // Hold, then move, selects text — the movement arrives as `HoldAndDrag` and takes the
-            // button with it. Hold, then lift, closes a drag that never moved, which is a click.
-            return .drag
-
-        case .windowChrome, .control:
-            // A menu here would steal the drag the user was starting off the title bar or the thumb.
-            return .none
-
-        default:
-            return action(for: .TUCCursorGestureLongPress)
-        }
-    }
-
-
-    /// Whether this surface has been established well enough to press the mouse button on it.
-    ///
-    /// The asymmetry this protects is the reason the whole mechanism is safe to commit early: a wrong
-    /// scroll costs a few pixels the user scrolls back, while a wrong drag picks up a file, selects
-    /// text, or moves a window — something they have to notice and undo. So a guess about what is
-    /// *inside* a window may only ever suppress scrolling, never start a drag: a window with no
-    /// accessibility support is indistinguishable from a full-screen game, and the top of a game is
-    /// not a handle.
-    ///
-    /// Two surfaces are exceptions, and neither is a guess about the inside of a window.
-    ///
-    /// The desktop is established by there being no window under the finger at all, which the window
-    /// list knows for certain without asking anybody — and a game is a window, so a game can never be
-    /// mistaken for it.
-    ///
-    /// Window chrome has to be one too, for a blunter reason: **a title bar has no accessibility
-    /// element in most applications**, so asking for one is asking for something that will never
-    /// arrive. Requiring it meant chrome always fell through to the setting — which in iPad Mode is
-    /// scroll — and windows could not be moved or resized at all, which is exactly what was reported.
-    /// What keeps a full-screen game safe is not this check but the one in
-    /// `-windowSurfaceForPoint:locationID:`, which refuses to claim a handle anywhere on a window
-    /// that fills its display.
-    private func canStartDrag(on context: TUCGestureContext) -> Bool {
-        switch context.surface {
-        case .desktop, .windowChrome: return true
-        default: return context.surfaceSource == .axElement
-        }
-    }
-
-
-    func action(for gesture: TUCCursorGesture) -> TUCCursorAction {
-        switch gesture {
-        case .TUCCursorGestureTouchDown:
-            return isClickWindowToFrontEnabled ? .moveClickIfNeeded : .move
-            
-        case .TUCCursorGestureTap:
-            return .click
-            
-        case .TUCCursorGestureLongPress:
-            // Posted as soon as a finger has held still long enough, with the finger still down —
-            // not on the lift. On a tablet that is the gesture for a context menu, which is a
-            // secondary click here.
-            //
-            // Mapping it to `.drag` instead holds the button down for as long as the finger rests
-            // and hands the movement after it to `HoldAndDrag`, which is how text is selected and
-            // how something is picked up.
-            return isLongPressContextMenuEnabled ? .secondaryClick : .none
-
-        case .TUCCursorGestureDrag:
-            if isClickOnLiftEnabled { return .pointAndClick }
-            if isDraggingWithOneFingerEnabled { return .drag }
-            return isScrollingWithOneFingerEnabled ? .scroll : .move
-            
-        case .TUCCursorGestureHoldAndDrag:
-            return .drag
-            
-        case .TUCCursorGestureTwoFingerDrag:
-            switch twoFingerDragAction {
-            case .drag:    return .drag
-            case .scroll:  return .scroll
-            case .nothing: return .none
-            }
-            
-        case .TUCCursorGesturePinch:
-            return isMagnificationEnabled ? .magnify : .none
-
-        // Sweeping three fingers, matching the trackpad pane's own directions: the space follows
-        // your fingers off the screen, up reveals Mission Control, down reveals the app's windows.
-        case .TUCCursorGestureSwipeLeft:
-            return isSystemSwipeEnabled ? .spaceNext : .none
-
-        case .TUCCursorGestureSwipeRight:
-            return isSystemSwipeEnabled ? .spacePrevious : .none
-
-        case .TUCCursorGestureSwipeUp:
-            return isSystemSwipeEnabled ? .missionControl : .none
-
-        case .TUCCursorGestureSwipeDown:
-            return isSystemSwipeEnabled ? .applicationWindows : .none
-            
-        default:
-            return .none
-        }
-    }
-    
-    
-    
     func touchscreenDidConnect(withLocationID locationID: UInt32, drivesPointer: Bool) {
         self.connectedDigitizers.append(Digitizer(locationID: locationID))
 
@@ -797,42 +449,10 @@ extension TouchUp {
         case \.isPublishingMouseEventsEnabled:
             return("Control Mouse with Touch",
                    "Turns the driver on or off.")
-            
-        case \.isScrollingWithOneFingerEnabled:
-            return("Scroll with one finger",
-                   "Scroll by dragging one finger over the touchscreen. If this option is disabled, you will move the cursor instead.")
-            
-        case \.isMagnificationEnabled:
-            return("Magnification",
-                   "Pinch two fingers to increase or decrease the size of the content. (EXPERIMENTAL)")
-            
-        case \.isClickWindowToFrontEnabled:
-            return("Bring Windows to Front",
-                   "Touching a window that is not in front focuses it and acts on what you touched, in one tap. Without this, the first tap only brings the window forward and you have to tap again.")
-            
-        case \.isClickOnLiftEnabled:
-            return("Point and click",
-                   "Very reduced input set for exhibits: Move cursor by dragging, and click by releasing. Overrides scrolling and dragging functionality.")
 
-        case \.isSystemSwipeEnabled:
-            return("Swipe Between Desktops",
-                   "Sweep three fingers across the screen to move between desktops, up for Mission Control, or down to see the current app's windows — as on a trackpad. Sent as the keyboard shortcuts macOS assigns to those commands, so the desktop switches in one step rather than following your fingers.")
-
-        case \.isSurfaceAwareGesturesEnabled:
-            return("Notice What You Touch",
-                   "Ask what is under your finger before deciding what a gesture means, the way a tablet does. One finger scrolls a web page, but drags a window by its title bar, moves a file on the desktop, and works a slider directly. Where nothing can be read — an application with no accessibility support, or a full-screen game — the setting above applies exactly as before.")
-
-        case \.isGestureInspectorEnabled:
-            return("Show What Touch Up Decides",
-                   "A small readout in the corner of the screen you are touching, showing what each touch was taken to be on and what that turned it into. For working out why a gesture did the wrong thing — it ignores touches entirely, so watching one cannot change it. Separate from the touch test above, which shows the raw contact points instead.")
-
-        case \.twoFingerDragAction:
-            return("On Two Finger Drag",
-                   "Dragging with two fingers holds the mouse button down and moves it, which is what pans a map, moves a window, works a slider or selects text. Nothing can tell those apart from a scrolling area, so they need a gesture of their own.")
-
-        case \.isCursorHiddenEnabled:
-            return("Hide the Mouse Pointer",
-                   "There is no pointer on a tablet, and one that jumps to wherever you touched is the clearest reminder that you are steering a mouse. Touching hides it; moving a mouse or trackpad brings it straight back, and the next touch hides it again.")
+        case \.isKioskModeEnabled:
+            return("Kiosk Mode",
+                   "Reduces the screen to pointing and clicking: nothing can be scrolled, dragged, zoomed or held. For a machine left in front of the public, where a visitor who scrolls a window away leaves it broken for the next person.")
 
         case \.isExclusiveAccessEnabled:
             return("Exclusive Access",
@@ -846,34 +466,6 @@ extension TouchUp {
             return("Open It When You Tap a Text Field",
                    "Watches which control has focus, in any app, and raises the keyboard when that control accepts typing. Focus is something apps report voluntarily, so some report it late and a few not at all — the menu bar item always works, and the keyboard has a key to put itself away.")
 
-        case \.isLongPressContextMenuEnabled:
-            return("Long Press for Menu",
-                   "Hold your finger still for a moment and the right-click menu opens under it, the way a long press does on a tablet. Use two fingers to drag things.")
-            
-        case \.holdDuration:
-            return("Hold Duration",
-                   "How long do you have to hold finger to initiate hold&drag")
-            
-        case \.doubleClickDistance:
-            return("Double Click Zone",
-                   "How many mm can two taps be apart from each other to qualify double click")
-
-        case \.tapDistance:
-            return("Tap Zone",
-                   "How many mm your finger may slide while touching and still count as a tap instead of a scroll. Raise it if taps sometimes only move the pointer instead of clicking; lower it if scrolling feels like it starts too late.")
-            
-        case \.ignoreOriginTouches:
-            return("Ignore Origin Touches",
-                   "If your touchscreen randomly sends coordinate (0,0) in its datastream, toggle this option to make input more stable.")
-            
-        case \.errorResistance:
-            return("Error Resistance",
-                   "If your touchscreen is really unreliable at reporting touches, increase this slider to make inputs more stable at the cost of higher latency in detecting liftoffs.")
-        
-        case \.areAdditionalDigitizerRotationSettingsVisible:
-            return("Digitizer Rotation",
-                   "Adds rotation and mirroring controls to each touchscreen. Only needed if the digitizer orientation does not match your screen — use mirroring if touches track correctly in the centre but run the wrong way towards the edges.")
-            
         default:
             return("\(keyPath)", "")
         }

@@ -41,11 +41,6 @@ NS_ASSUME_NONNULL_BEGIN
  */
 - (nullable TUCScreen *)touchscreenForLocationID:(uint32_t)locationID;
 
-/**
- Used to customize which mouse events are posted by the input manager.
- */
-- (TUCCursorAction)actionForGesture:(TUCCursorGesture)gesture;
-
 - (CGFloat)digitizerRotationForLocationID:(uint32_t)locationID;
 
 /**
@@ -60,12 +55,26 @@ NS_ASSUME_NONNULL_BEGIN
 @optional
 
 /**
+ Used to customize which mouse events are posted by the input manager.
+
+ Optional, and unimplemented by Touch Up itself. Left alone, the manager applies its own mapping:
+ one finger scrolls what it is on and drags what can be dragged, holding still opens the context
+ menu, two fingers drag, pinching zooms, and three sweep between desktops. That is the whole
+ behaviour of the app, and it lives here rather than in the delegate because there is only one of
+ it — a mapping nobody can change does not need a hook to change it through.
+
+ Implement this only to mean something different. Doing so replaces the built-in mapping entirely.
+ */
+- (TUCCursorAction)actionForGesture:(TUCCursorGesture)gesture;
+
+/**
  The same question as `-actionForGesture:`, with the circumstances the gesture happened in.
 
  Implement this instead of `-actionForGesture:` to let a gesture mean different things in different
  places — a flick scrolling a list but moving a window by its title bar, a hold selecting text rather
- than opening a menu. Implementing it replaces `-actionForGesture:` entirely; the manager calls
- whichever is available and never both.
+ than opening a menu. The manager's own mapping already does this; implement this to do it
+ differently. Implementing it replaces both the built-in mapping and `-actionForGesture:`; the
+ manager calls exactly one of the three and never two.
 
  Two things to know before branching on `context.surface`.
 

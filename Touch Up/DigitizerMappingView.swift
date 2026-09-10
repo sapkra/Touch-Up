@@ -64,16 +64,12 @@ struct DigitizerMappingView: View {
             }
 
             HStack(spacing: 8) {
-                let current = model.digitizerConfigs[digitizer.locationID]?.additionalRotation ?? 0
-
                 Text(digitizer.deviceName)
                     .lineLimit(1)
                     .truncationMode(.middle)
 
-                if model.areAdditionalDigitizerRotationSettingsVisible || current != 0 || isMirrored(digitizer) {
-                    rotationPicker(for: digitizer)
-                    flipButtons(for: digitizer)
-                }
+                rotationPicker(for: digitizer)
+                flipButtons(for: digitizer)
 
                 Spacer(minLength: 8)
 

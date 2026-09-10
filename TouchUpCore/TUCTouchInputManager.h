@@ -113,17 +113,31 @@ NS_ASSUME_NONNULL_BEGIN
 
 /**
  Whether to work out what each finger landed on, so a gesture can mean different things in different
- places. Default is NO.
+ places. Default is YES.
 
- A capability rather than a mapping: it decides whether the question is asked at all, and
- `-actionForGesture:inContext:` decides what to do with the answer. With this off nothing is asked,
- which is the point — the cheap half of the classification is a window-server round trip, and paying
- for it on every touch would be wrong for anybody not using the result.
+ A capability rather than a mapping: it decides whether the question is asked at all, and the
+ mapping decides what to do with the answer. The built-in mapping needs it — knowing what is under
+ the finger is the difference between one finger that always scrolls and one that scrolls a page
+ but moves a window by its title bar — so it is on unless a framework consumer that supplies its
+ own surface-blind mapping turns it off. The cheap half of the classification is a window-server
+ round trip, and paying for it on every touch would be wrong for somebody not using the result.
 
  Answers are never waited for. A gesture that has to be decided before one arrives is decided
  without it, so this changes what is *known*, never when anything happens.
  */
 @property (nonatomic) BOOL classifiesSurfaces;
+
+
+/**
+ Reduces the glass to pointing and clicking: nothing can be scrolled, dragged, zoomed or held.
+ Default is NO.
+
+ For a machine left unattended in front of the public, where a visitor who scrolls a window away
+ or drags a file into a folder leaves it broken for the next one. It is a deployment decision
+ rather than a preference, which is why it is the one thing about the mapping that can still be
+ changed.
+ */
+@property (nonatomic) BOOL kioskMode;
 
 
 /**
