@@ -32,9 +32,18 @@ class TouchUp: NSObject, ObservableObject {
     @Published var isOnScreenKeyboardEnabled = false
     @Published var isKeyboardAutoShowEnabled = false
 
-    /// A live readout of what each touch was taken to be. No settings row: it is a tool for
-    /// working out why a gesture went the wrong way, reached by setting the default by hand.
-    @Published var isGestureInspectorEnabled = UserDefaults.standard.bool(forKey: "isGestureInspectorEnabled")
+    /// A live readout of what each touch was taken to be, for working out why a gesture went the
+    /// wrong way.
+    ///
+    /// It has a settings row, and it has to. It was briefly a hidden default on the grounds that
+    /// the window should only hold things people need — but a view that can be left switched on
+    /// with no way to switch it off is a trap, and it caught somebody the first day: their machine
+    /// had it enabled, the update took the row away, and the readout became permanent. The obvious
+    /// escape does not work either, because the app is sandboxed and `defaults write` on the
+    /// bundle identifier edits a file outside the container that nothing reads.
+    ///
+    /// Anything that can be turned on inside the app can be turned off inside the app.
+    @Published var isGestureInspectorEnabled = false
 
 
     @Published var connectedScreens = [TUCScreen]()
@@ -182,6 +191,7 @@ extension TouchUp {
         defaults.register(defaults: [
             "isKioskModeEnabled" : false,
             "isExclusiveAccessEnabled" : false,
+            "isGestureInspectorEnabled" : false,
 
             // Off by default. A machine with a keyboard attached does not want a second one taking
             // up the bottom of the screen.
@@ -191,6 +201,7 @@ extension TouchUp {
 
         isKioskModeEnabled = defaults.bool(forKey: "isKioskModeEnabled")
         isExclusiveAccessEnabled = defaults.bool(forKey: "isExclusiveAccessEnabled")
+        isGestureInspectorEnabled = defaults.bool(forKey: "isGestureInspectorEnabled")
         isOnScreenKeyboardEnabled = defaults.bool(forKey: "isOnScreenKeyboardEnabled")
         isKeyboardAutoShowEnabled = defaults.bool(forKey: "isKeyboardAutoShowEnabled")
 
@@ -225,6 +236,7 @@ extension TouchUp {
 
         defaults.set(isKioskModeEnabled, forKey: "isKioskModeEnabled")
         defaults.set(isExclusiveAccessEnabled, forKey: "isExclusiveAccessEnabled")
+        defaults.set(isGestureInspectorEnabled, forKey: "isGestureInspectorEnabled")
         defaults.set(isOnScreenKeyboardEnabled, forKey: "isOnScreenKeyboardEnabled")
         defaults.set(isKeyboardAutoShowEnabled, forKey: "isKeyboardAutoShowEnabled")
     }
@@ -457,6 +469,10 @@ extension TouchUp {
         case \.isExclusiveAccessEnabled:
             return("Exclusive Access",
                    "Take sole control of the touchscreen so macOS stops handling it too. Enable this if your screen still behaves like a trackpad, or if every touch seems to register twice. (EXPERIMENTAL)")
+
+        case \.isGestureInspectorEnabled:
+            return("Show What Touch Up Decides",
+                   "A small readout in the corner of the screen you are touching, showing what each touch was taken to be on and what that turned it into. For working out why a gesture did the wrong thing — it ignores touches entirely, so watching one cannot change it.")
 
         case \.isOnScreenKeyboardEnabled:
             return("On-Screen Keyboard",

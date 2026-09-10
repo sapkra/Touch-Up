@@ -78,6 +78,10 @@ struct SettingsView: View {
                 SettingsExplanationLabel(labels: model.uiLabels(for: \.isExclusiveAccessEnabled))
             }
 
+            Toggle(isOn: $model.isGestureInspectorEnabled) {
+                SettingsExplanationLabel(labels: model.uiLabels(for: \.isGestureInspectorEnabled))
+            }
+
             diagnosticsButton
         }
     }
