@@ -110,10 +110,6 @@ struct Digitizer: Codable, Hashable, Identifiable {
         "0x\(String(format: "%08x", locationID))"
     }
 
-    var isUniquelyIdentifiable: Bool {
-        serialNumber != nil
-    }
-    
     var id: HIDLocationID {
         locationID
     }

@@ -900,7 +900,6 @@ extension TouchUp {
 enum ConnectionState: Int {
     case uncertain
     case disconnected
-    case connectedHotPlug // connected as result from hot plugging within a few seconds
     case connectedPreferred // connected with stored cues matching perfectly
     
     var image: NSImage? {
@@ -921,7 +920,7 @@ enum ConnectionState: Int {
     }
     
     var isConnected: Bool {
-        return self == .connectedPreferred || self == .connectedHotPlug
+        return self == .connectedPreferred
     }
 }
 

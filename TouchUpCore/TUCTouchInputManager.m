@@ -640,9 +640,6 @@ static NSString *TUCNameForDigitizerKind(TUCDigitizerKind kind) {
     // is about to produce is posted at `touch.location`, so taking the reported zeroes would put
     // it in the top-left corner of the screen.
     if (!isSuspectOriginReport) {
-        // Recorded from the same starting point the conversion uses, so the two cannot disagree
-        // about which space a measurement was taken in.
-        [touch setUncorrectedGlassLocation:[self mirrorDigitizerPoint:digitizerPoint locationID:locationID]];
         [touch setLocation:[self convertDigitizerPointToRelativeScreenPoint:digitizerPoint locationID:locationID]];
     } else {
         [self noteOnceForLocationID:locationID
@@ -1844,10 +1841,10 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
  The reported point with the user's mirror flags applied and nothing else.
 
  Split out because this boundary — the digitizer's own frame, before anything is known about how the
- display is oriented or shaped — is the only one a calibration can be measured against, and
- `TUCTouch.uncorrectedGlassLocation` has to be recorded at exactly the same point the conversion
- starts from. Two copies of the mirroring rule that drifted apart would put every measurement in a
- slightly different space than the one it was meant to correct.
+ display is oriented or shaped — is the only one a per-panel calibration could ever be measured
+ against, so anything that wants to measure the conversion has to start from exactly here. Nothing
+ does yet; the split is kept because the alternative is two copies of the mirroring rule that drift
+ apart and put a measurement in a different space from the one it was meant to correct.
  */
 - (CGPoint)mirrorDigitizerPoint:(CGPoint)devicePoint locationID:(uint32_t)locationID {
     // Corrects how the panel is wired, which is independent of how the display is currently

@@ -218,23 +218,6 @@ typedef NS_ENUM(NSUInteger, TUCSurfaceState) {
 @property (nonatomic) CGPoint location;
 @property CGPoint previousLocation;
 
-/**
- Where the report put this contact in the digitizer's own frame: after mirroring, before rotation
- and the letterbox fit, and **unclamped**.
-
- `location` is what every gesture acts on, and by the time it is set it has already been through the
- whole conversion — so nothing downstream can see what the hardware actually said. That is fine for
- driving a pointer and useless for measuring the conversion itself, which is the one thing a
- calibration has to do.
-
- Unclamped on purpose. `-[TUCScreen convertGlassPointToContentPoint:]` snaps its result into [0,1],
- which is right for pointing (a touch on a letterbox bar should land on the nearest edge) and wrong
- for measuring: a touch frame whose active area overshoots the panel genuinely reports positions
- outside the content, and clamping turns that overshoot into a plausible 0 or 1 — the exact evidence
- needed to correct it, replaced by a value indistinguishable from a correct reading.
- */
-@property CGPoint uncorrectedGlassLocation;
-
 @property NSInteger lastUpdated; // the page ID during last update
 
 /// Wall-clock time of the last report for this touch, as a `timeIntervalSinceReferenceDate`.
