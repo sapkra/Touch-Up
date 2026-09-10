@@ -710,14 +710,17 @@ static NSTimeInterval TUCMomentumDurationForSpeed(CGFloat initialSpeed) {
  */
 - (void)startMomentumDisplayLink {
     CGPoint location = [self currentCursorLocation];
-    NSScreen *screen = nil;
+    NSArray<NSScreen *> *screens = [NSScreen screens];
 
-    for (NSScreen *candidate in [NSScreen screens]) {
-        // `NSScreen.frame` is bottom-left origin; the pointer here is top-left. Comparing them
-        // needs the flip, and the total height to flip against is the main screen's.
+    // `NSScreen.frame` is bottom-left origin and the pointer here is top-left, so comparing them
+    // needs the flip. The height to flip against is the top of the screen at index 0 — the one
+    // carrying the menu bar, which is what defines the origin of the global space.
+    CGFloat flipHeight = NSMaxY(screens.firstObject.frame);
+
+    NSScreen *screen = nil;
+    for (NSScreen *candidate in screens) {
         NSRect frame = candidate.frame;
-        CGFloat mainHeight = NSMaxY([NSScreen screens].firstObject.frame);
-        NSRect topLeft = NSMakeRect(NSMinX(frame), mainHeight - NSMaxY(frame),
+        NSRect topLeft = NSMakeRect(NSMinX(frame), flipHeight - NSMaxY(frame),
                                     NSWidth(frame), NSHeight(frame));
         if (NSPointInRect(NSPointFromCGPoint(location), topLeft)) {
             screen = candidate;
