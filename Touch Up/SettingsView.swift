@@ -94,10 +94,6 @@ struct SettingsView: View {
             }
 
 
-            Toggle(isOn: $model.isSecondaryClickEnabled) {
-                SettingsExplanationLabel(labels: model.uiLabels(for: \.isSecondaryClickEnabled))
-            }
-            
             Toggle(isOn: $model.isSystemSwipeEnabled) {
                 SettingsExplanationLabel(labels: model.uiLabels(for: \.isSystemSwipeEnabled))
             }

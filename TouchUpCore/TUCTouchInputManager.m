@@ -130,14 +130,6 @@ static const CGFloat kHoldStillnessTolerance = 1.0;
 static const CGFloat kPhaseMovementThreshold = 0.1;
 
 /**
- How close (mm) a second finger has to tap to the resting one to mean a secondary click. Measured
- as a true radius — the old proximity helper normalised each axis separately and then compared
- against the horizontal one, which on a portrait panel stretched the vertical reach by the whole
- aspect ratio.
- */
-static const CGFloat kSecondFingerProximity = 60.0;
-
-/**
  How far (mm) a two-finger gesture has to develop before it is called a pinch or a pan. Deciding
  on the first report or two reads mostly noise; waiting until one interpretation is clearly ahead
  costs a few milliseconds and gets it right.
@@ -197,7 +189,6 @@ static NSString *TUCNameForGesture(TUCCursorGesture gesture) {
         case TUCCursorGestureLongPress:       return @"LongPress";
         case TUCCursorGestureDrag:            return @"Drag";
         case TUCCursorGestureHoldAndDrag:     return @"HoldAndDrag";
-        case TUCCursorGestureTapSecondFinger: return @"SecondFingerTap";
         case TUCCursorGestureTwoFingerDrag:   return @"TwoFingerDrag";
         case TUCCursorGesturePinch:           return @"Pinch";
         case TUCCursorGestureSwipeLeft:       return @"SwipeLeft";
@@ -1125,10 +1116,8 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
 
 
     else if (phase == NSTouchPhaseStationary) {
-        if (touches.count <= 2) {
-            [self checkForSecondaryClick];
-        }
-
+        // Nothing to do but wait: `updateHoldState` above is what turns resting still into a long
+        // press, and that is the only thing a motionless finger means.
         return;
     }
 
@@ -1228,10 +1217,6 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
                      insideFrame:[self absoluteBoundsForLocationID:cursorTouch.locationID]];
         }
 
-        return;
-    }
-    
-    if (touches.count <= 2 && [self checkForSecondaryClick]) {
         return;
     }
     
@@ -1430,75 +1415,6 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
         // `identifiedMultitouchGesture` first and skips.
         [[TUCCursorUtilities sharedInstance] cancelScrollGesture];
     }
-}
-
-
-/**
- Detects the secondary-click gesture: a second finger tapped down and up again close to the one
- that is resting on the glass.
-
- The second finger has to have been on the glass *at the same time* as the resting one. Ended
- touches stay in `touchSet` for half a second after they lift — long enough for the previous,
- finished tap to still be sitting there — and this used to accept any of them. Since the only
- thing excluding them was a differing contact ID, and controllers routinely hand out a fresh ID
- for each touch, tapping twice near the same spot inside half a second turned the second tap into
- a right-click. On a resting finger the check runs on the very first stationary report, so it beat
- the tap to it every time.
- */
-- (BOOL)checkForSecondaryClick {
-    TUCTouch *cursorTouch = self.cursorTouch;
-    if (cursorTouch == nil || self.identifiedMultitouchGesture != _TUCCursorGestureNone) {
-        return NO;
-    }
-
-    // Resting long enough already opened a menu; a second finger must not open another.
-    if (self.cursorTouchDidActuateLongPress) {
-        return NO;
-    }
-
-    TUCScreen *screen = [self touchscreenForLocationID:cursorTouch.locationID];
-    if (screen == nil) {
-        return NO;
-    }
-
-    // The second finger has to have been on the glass at the same time as this one, which is true
-    // exactly when its last report came in after this touch landed.
-    //
-    // An earlier attempt at this compared HID frame counters, which is wrong for a reason worth
-    // recording: that counter advances once per report, so a gap of six frames is six reports and
-    // not six milliseconds. Between two taps the device reports nothing at all, so the previous
-    // tap stayed permanently "within six frames" of the next one and every second tap in quick
-    // succession opened a menu instead of clicking. A counter of activity is not a clock.
-
-    TUCTouch *secondFinger = nil;
-    NSUInteger candidateCount = 0;
-
-    for (TUCTouch *touch in self.touchSet) {
-        if (touch.locationID != cursorTouch.locationID) continue;
-        if (touch.uuid == cursorTouch.uuid) continue;
-
-        if ([screen millimetreDistanceBetweenRelativePoint:touch.location
-                                                       and:cursorTouch.location] > kSecondFingerProximity) {
-            continue;
-        }
-
-        BOOL hasLifted = (touch.phase == NSTouchPhaseEnded || touch.phase == NSTouchPhaseCancelled);
-        if (!hasLifted || touch.lastUpdatedTime < self.cursorTouchBeganTime) {
-            continue;
-        }
-
-        candidateCount++;
-        secondFinger = touch;
-    }
-
-    // Exactly one, or it is not the gesture — several fingers lifting together is something else.
-    if (candidateCount != 1) {
-        return NO;
-    }
-
-    [self removeTouch:secondFinger now:YES];
-    [self performMouseEventForGesture:TUCCursorGestureTapSecondFinger];
-    return YES;
 }
 
 
@@ -1716,7 +1632,6 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
         case TUCCursorGestureLongPress:         return TUCCursorActionNone;
         case TUCCursorGestureDrag:              return TUCCursorActionScroll;
         case TUCCursorGestureHoldAndDrag:       return TUCCursorActionDrag;
-        case TUCCursorGestureTapSecondFinger:   return TUCCursorActionSecondaryClick;
         case TUCCursorGestureTwoFingerDrag:     return TUCCursorActionDrag;
             
         case TUCCursorGesturePinch:             return TUCCursorActionMagnify;

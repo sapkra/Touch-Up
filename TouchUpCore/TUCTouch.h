@@ -17,7 +17,6 @@ typedef NS_OPTIONS(NSUInteger, TUCCursorGesture) {
     TUCCursorGestureLongPress       = 1 << 3,
     TUCCursorGestureDrag            = 1 << 4,
     TUCCursorGestureHoldAndDrag     = 1 << 5,
-    TUCCursorGestureTapSecondFinger = 1 << 6,
     TUCCursorGestureTwoFingerDrag   = 1 << 7,
     TUCCursorGesturePinch           = 1 << 8, // internal: pinch cannot be remapped
 

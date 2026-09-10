@@ -28,7 +28,6 @@ class TouchUp: NSObject, ObservableObject {
     @Published var ignoreOriginTouches: Bool = false
     
     @Published var isScrollingWithOneFingerEnabled = false
-    @Published var isSecondaryClickEnabled = false
     @Published var isMagnificationEnabled = false
     @Published var isClickWindowToFrontEnabled = false
     @Published var isClickOnLiftEnabled = false
@@ -147,7 +146,6 @@ class TouchUp: NSObject, ObservableObject {
             && isCursorHiddenEnabled
             && isSystemSwipeEnabled
             && twoFingerDragAction == .drag
-            && !isSecondaryClickEnabled
             && !isClickOnLiftEnabled
             && !isDraggingWithOneFingerEnabled
             && isClickWindowToFrontEnabled
@@ -191,10 +189,6 @@ class TouchUp: NSObject, ObservableObject {
 
         // Holding still opens the context menu, which is what a long press does on a tablet.
         isLongPressContextMenuEnabled = true
-
-        // Two-finger tap for a secondary click is a trackpad idiom with no tablet equivalent, and
-        // the long press already covers the menu.
-        isSecondaryClickEnabled = false
 
         isMagnificationEnabled = true
         isSystemSwipeEnabled = true
@@ -282,7 +276,6 @@ extension TouchUp {
             "ignoreOriginTouches" : true,
 
             "isScrollingWithOneFingerEnabled" : true,
-            "isSecondaryClickEnabled" : true,
             "isMagnificationEnabled" : true,
             "isClickWindowToFrontEnabled" : false,
             "isClickOnLiftEnabled" : false,
@@ -344,7 +337,6 @@ extension TouchUp {
         
         
         isScrollingWithOneFingerEnabled = defaults.bool(forKey: "isScrollingWithOneFingerEnabled")
-        isSecondaryClickEnabled = defaults.bool(forKey: "isSecondaryClickEnabled")
         isMagnificationEnabled = defaults.bool(forKey: "isMagnificationEnabled")
         isClickWindowToFrontEnabled = defaults.bool(forKey: "isClickWindowToFrontEnabled")
         isClickOnLiftEnabled = defaults.bool(forKey: "isClickOnLiftEnabled")
@@ -387,7 +379,6 @@ extension TouchUp {
         defaults.set(ignoreOriginTouches, forKey: "ignoreOriginTouches")
 
         defaults.set(isScrollingWithOneFingerEnabled, forKey: "isScrollingWithOneFingerEnabled")
-        defaults.set(isSecondaryClickEnabled, forKey: "isSecondaryClickEnabled")
         defaults.set(isMagnificationEnabled, forKey: "isMagnificationEnabled")
         defaults.set(isClickWindowToFrontEnabled, forKey: "isClickWindowToFrontEnabled")
         defaults.set(isClickOnLiftEnabled, forKey: "isClickOnLiftEnabled")
@@ -734,9 +725,6 @@ extension TouchUp: TUCTouchDelegate {
         case .TUCCursorGestureHoldAndDrag:
             return .drag
             
-        case .TUCCursorGestureTapSecondFinger:
-            return isSecondaryClickEnabled ? .secondaryClick : .none
-            
         case .TUCCursorGestureTwoFingerDrag:
             switch twoFingerDragAction {
             case .drag:    return .drag
@@ -813,10 +801,6 @@ extension TouchUp {
         case \.isScrollingWithOneFingerEnabled:
             return("Scroll with one finger",
                    "Scroll by dragging one finger over the touchscreen. If this option is disabled, you will move the cursor instead.")
-            
-        case \.isSecondaryClickEnabled:
-            return("Secondary Click",
-                   "While your pointing finger is resting on the screen, tap another finger in proximity to it to generate a secondary click event at the location of the first finger.")
             
         case \.isMagnificationEnabled:
             return("Magnification",
