@@ -675,28 +675,41 @@ startingNewClickSequence:(BOOL)startsNewSequence {
     
     CGEventSetType(event, 29); // type gesture
     CGEventSetFlags(event, 0);
-    
+
+    // Field 113 is the magnification, and it is the only one of these a zoom carries. The three
+    // that used to be written alongside it belong to other gestures entirely — 114 is a rotation
+    // in degrees, 116 is a scroll gesture's horizontal delta, and 119 (not 118, which nothing
+    // reads) is its vertical one. Writing the pinch amount into all four claimed a simultaneous
+    // twist and sideways scroll on every zoom.
     CGEventSetDoubleValueField(event, 113, magnification);
-    CGEventSetDoubleValueField(event, 114, magnification);
-    CGEventSetDoubleValueField(event, 116, magnification);
-    CGEventSetDoubleValueField(event, 118, magnification);
-    
-    // magic
-//    CGEventSetIntegerValueField(event, 55, 29); //if more touches on trackapd 30? about concurrent gestures???
+
+    // 110 is the subtype, and it is what makes this a zoom rather than an unrecognised gesture:
+    // 8 is `kIOHIDEventTypeZoom`. The other two are undocumented and carried over from the
+    // implementations this was derived from; they are left alone because nothing here knows what
+    // they mean, and the gesture does not arrive without them.
     CGEventSetIntegerValueField(event, 50, 248);
     CGEventSetIntegerValueField(event, 101, 4);
     CGEventSetIntegerValueField(event, 110, 8);
-    
-    
+
+
+    // `NSTouchPhase` and `CGGesturePhase` are different enumerations that happen to agree on
+    // their first two values and disagree after that: Stationary is 4 in one and Ended in the
+    // other, and Ended is 8 in one and *Cancelled* in the other. Posting the touch phase raw —
+    // which is what this did — meant every pinch ended by telling the application it had been
+    // cancelled, so the zoom snapped back to where it started instead of committing, and pausing
+    // mid-pinch ended the gesture outright. That is the whole of why this was marked
+    // experimental.
     CGGesturePhase gesturePhase = kCGGesturePhaseEnded;
     if (phase == NSTouchPhaseBegan) {
         gesturePhase = kCGGesturePhaseBegan;
     } else if (phase == NSTouchPhaseMoved || phase == NSTouchPhaseStationary) {
         gesturePhase = kCGGesturePhaseChanged;
+    } else if (phase == NSTouchPhaseCancelled) {
+        gesturePhase = kCGGesturePhaseCancelled;
     }
-    
-    CGEventSetIntegerValueField(event, 132, phase);
-    
+
+    CGEventSetIntegerValueField(event, 132, gesturePhase);
+
     [self postSyntheticEvent:event];
     CFRelease(event);
 }
