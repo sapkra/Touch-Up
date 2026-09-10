@@ -796,9 +796,10 @@ static void RememberEntry(TUCSurfaceCacheEntry *entry) {
     NSMutableString *out = [NSMutableString stringWithString:@"───── Surface probe ─────\n"];
 
     if (!AXIsProcessTrusted()) {
-        [out appendString:@"Accessibility: NOT GRANTED — nothing under a finger can be read, so every\n"
-                           "               gesture falls back to its setting. The permission is\n"
-                           "               remembered per app signature, so a rebuild can lose it.\n"];
+        [out appendString:@"Accessibility: NOT GRANTED — nothing under a finger can be read, so one\n"
+                           "               finger scrolls everywhere and windows cannot be dragged\n"
+                           "               by their title bars. The permission is remembered per app\n"
+                           "               signature, so a rebuild can lose it.\n"];
     } else {
         [out appendString:@"Accessibility: granted\n"];
     }

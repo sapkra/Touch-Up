@@ -101,8 +101,8 @@ struct SettingsView: View {
         }
         // Re-arm as soon as anything about the devices changes, so a second report after
         // re-plugging is one click away.
-        .onChange(of: model.connectedDigitizers) { _ in didCopyDiagnostics = false }
-        .onChange(of: model.connectedScreens) { _ in didCopyDiagnostics = false }
+        .onChange(of: model.connectedDigitizers) { didCopyDiagnostics = false }
+        .onChange(of: model.connectedScreens) { didCopyDiagnostics = false }
     }
 
 
