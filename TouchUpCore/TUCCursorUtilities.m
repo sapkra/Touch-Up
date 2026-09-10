@@ -8,6 +8,7 @@
 #import "TUCCursorUtilities.h"
 #import <dlfcn.h>
 #import <Carbon/Carbon.h> // virtual key codes
+#import <QuartzCore/QuartzCore.h> // CADisplayLink
 
 @interface TUCCursorUtilities ()
 
@@ -24,9 +25,17 @@
 @property CGPoint scrollVelocity;
 @property NSTimeInterval timeOfLastScroll;
 
-/// Speed the flick is currently coasting at, in points per second.
-@property CGPoint momentumVelocity;
-@property (strong) NSTimer *momentumScrollTimer;
+/// Unit vector the flick is travelling along. Fixed for the whole of a flick: the curve below
+/// decays a speed, and a flick does not change its mind about direction after the finger has gone.
+@property CGPoint momentumDirection;
+/// Speed the flick started at, in points per second.
+@property CGFloat momentumInitialSpeed;
+/// When the flick started, on the same clock `CADisplayLink` reports.
+@property CFTimeInterval momentumStartTime;
+/// How far along the curve has already been emitted, in points. Deltas are the difference between
+/// two evaluations of the closed form rather than an accumulation, so rounding cannot drift.
+@property CGFloat momentumDistanceEmitted;
+@property (strong) CADisplayLink *momentumDisplayLink;
 
 /// Where the drag was last taken. `-currentCursorLocation` cannot be used to release a drag: the
 /// moves being released were themselves posted asynchronously, so it can still report a position
@@ -47,16 +56,34 @@
 
 @end
 
-/// Momentum is stepped at display rate so a flick looks continuous rather than stepped.
-static const NSTimeInterval kMomentumFrameInterval = 1.0 / 60.0;
+/**
+ A flick slows the way a trackpad's does: as drag, `v' = -a * v^b`, rather than by keeping a
+ fraction of its speed every frame.
 
-/// Fraction of the speed that survives one momentum step. Tuned for a time constant near 0.3 s,
-/// which lands close to how far the system's own flicks carry.
-static const CGFloat kMomentumDecayPerFrame = 0.95;
+ The exponent is what matters. Below 1 the drag is sub-linear in speed, so the tail decays faster
+ than an exponential and the curve reaches exactly zero at a finite time — which is much of why the
+ system's own flicks feel like they *land* rather than fading out. A per-frame fraction never
+ reaches zero at all, which is why the old implementation needed an arbitrary cutoff speed to stop
+ smearing the last pixel around.
 
-/// Points per second below which a flick is finished. Carrying on past this only smears the last
-/// pixel around and delays the gesture ending.
+ It also means the whole flick is known the moment the finger leaves: solving `v(t) = 0` gives the
+ duration, and integrating gives the distance, so each frame can ask where the curve is now instead
+ of accumulating a decay and drifting if a frame is late.
+
+ Values match a real Apple trackpad closely enough that a flick carries about as far as one made on
+ the built-in one.
+ */
+static const CGFloat kMomentumDragCoefficient = 30.0;
+static const CGFloat kMomentumDragExponent = 0.7;
+
+/// Points per second below which a lift is not a flick at all. Well under a deliberate throw, and
+/// above the speed a finger is still moving at when it is simply set down and picked up again.
 static const CGFloat kMomentumMinimumSpeed = 30.0;
+
+/// A finger that has been still this long before lifting was not flicking, whatever the smoothed
+/// velocity still says. Without it, resting at the end of a scroll and then lifting throws the
+/// content — the one momentum bug everybody notices.
+static const NSTimeInterval kMomentumStaleInputInterval = 0.06;
 
 /// Single, double, triple. Nothing in a macOS interface acts on more, and letting the count run
 /// past it means a run of taps never produces a plain click again.
@@ -597,6 +624,41 @@ startingNewClickSequence:(BOOL)startsNewSequence {
 }
 
 
+/**
+ How far the flick has carried by `t` seconds, given the speed it started at.
+
+ With `c = 1 - b`, integrating `v' = -a*v^b` gives the speed as `v(t) = u^(1/c)` for
+ `u = v0^c - a*c*t`, and integrating that in turn gives the distance below. Note the first term is
+ `v0^(1+c)` and not `v0^((1+c)/c)`: it is `u(0)` raised to the same power as `u(t)`, and `u(0)` is
+ already `v0^c`. Getting that wrong does not misbehave subtly — it puts the distance out by ten
+ orders of magnitude.
+
+ Distance rather than speed is what each frame asks for, so a late or dropped frame costs nothing:
+ every frame emits the difference between where the curve is now and where it last was, and the
+ total is the same whether it arrived in forty frames or four.
+ */
+static CGFloat TUCMomentumDistanceAtTime(CGFloat initialSpeed, NSTimeInterval t) {
+    const CGFloat c = 1.0 - kMomentumDragExponent;
+    const CGFloat exponent = (1.0 + c) / c;
+
+    CGFloat remaining = pow(initialSpeed, c) - kMomentumDragCoefficient * c * t;
+    if (remaining < 0) {
+        remaining = 0;
+    }
+
+    return (pow(initialSpeed, 1.0 + c) - pow(remaining, exponent))
+         / (kMomentumDragCoefficient * (1.0 + c));
+}
+
+
+/// When `u` reaches zero, which is when the flick has stopped — a real, finite time, which is the
+/// whole reason for choosing a drag curve over a per-frame decay.
+static NSTimeInterval TUCMomentumDurationForSpeed(CGFloat initialSpeed) {
+    const CGFloat c = 1.0 - kMomentumDragExponent;
+    return pow(initialSpeed, c) / (kMomentumDragCoefficient * c);
+}
+
+
 - (void)endScrollGesture {
     if (!self.isScrolling) {
         return;
@@ -606,55 +668,122 @@ startingNewClickSequence:(BOOL)startsNewSequence {
     [self postGestureScrollTranslation:CGPointZero phase:kCGScrollPhaseEnded];
 
     CGPoint flickVelocity = self.scrollVelocity;
+    NSTimeInterval sinceLastInput = [NSDate timeIntervalSinceReferenceDate] - self.timeOfLastScroll;
     self.scrollVelocity = CGPointZero;
 
-    if (hypot(flickVelocity.x, flickVelocity.y) < kMomentumMinimumSpeed) {
+    // A finger that came to rest before lifting was not throwing anything, however fast it was
+    // travelling a moment earlier.
+    if (sinceLastInput > kMomentumStaleInputInterval) {
         return;
     }
 
-    // macOS does not generate inertia for injected events, so the decay is still ours — but
+    CGFloat speed = hypot(flickVelocity.x, flickVelocity.y);
+    if (speed < kMomentumMinimumSpeed) {
+        return;
+    }
+
+    // macOS does not generate inertia for injected events, so the curve is still ours — but
     // labelled as momentum, a view integrates it as a flick and rubber-bands out of it, instead
     // of receiving a burst of wheel notches.
-    self.momentumVelocity = flickVelocity;
-    [self postMomentumWithPhase:kCGMomentumScrollPhaseBegin];
+    self.momentumDirection = CGPointMake(flickVelocity.x / speed, flickVelocity.y / speed);
+    self.momentumInitialSpeed = speed;
+    self.momentumDistanceEmitted = 0;
+    self.momentumStartTime = CACurrentMediaTime();
 
-    self.momentumScrollTimer = [NSTimer scheduledTimerWithTimeInterval:kMomentumFrameInterval
-                                                               target:self
-                                                             selector:@selector(updateMomentumScroll)
-                                                             userInfo:nil
-                                                              repeats:YES];
+    [self postMomentumDistance:0 phase:kCGMomentumScrollPhaseBegin];
+
+    [self startMomentumDisplayLink];
 }
 
 
-- (void)updateMomentumScroll {
-    self.momentumVelocity = CGPointMake(self.momentumVelocity.x * kMomentumDecayPerFrame,
-                                        self.momentumVelocity.y * kMomentumDecayPerFrame);
+/**
+ Steps the flick at the refresh rate of the display it is happening on.
 
-    if (hypot(self.momentumVelocity.x, self.momentumVelocity.y) < kMomentumMinimumSpeed) {
-        [self cancelMomentumScroll];
+ A timer at a fixed 1/60 s — which this used to be — runs at half rate on a 120 Hz panel and drifts
+ against every other rate. `NSScreen` vends a display link that is already tied to one screen's
+ refresh, and asking for the full available range opts into ProMotion rather than being pinned to
+ 60 by default.
+
+ The screen is whichever one the pointer is on, which during a touch is the panel being touched.
+ Falling back to the main screen matters only if that lookup fails, and a flick on the wrong
+ refresh rate is still a flick.
+ */
+- (void)startMomentumDisplayLink {
+    CGPoint location = [self currentCursorLocation];
+    NSScreen *screen = nil;
+
+    for (NSScreen *candidate in [NSScreen screens]) {
+        // `NSScreen.frame` is bottom-left origin; the pointer here is top-left. Comparing them
+        // needs the flip, and the total height to flip against is the main screen's.
+        NSRect frame = candidate.frame;
+        CGFloat mainHeight = NSMaxY([NSScreen screens].firstObject.frame);
+        NSRect topLeft = NSMakeRect(NSMinX(frame), mainHeight - NSMaxY(frame),
+                                    NSWidth(frame), NSHeight(frame));
+        if (NSPointInRect(NSPointFromCGPoint(location), topLeft)) {
+            screen = candidate;
+            break;
+        }
+    }
+
+    screen = screen ?: [NSScreen mainScreen];
+    if (screen == nil) {
+        // Nothing to drive it with. Ending the phase here is better than leaving a view waiting
+        // for the close of a flick that will never be stepped.
+        [self postMomentumDistance:0 phase:kCGMomentumScrollPhaseEnd];
         return;
     }
 
-    [self postMomentumWithPhase:kCGMomentumScrollPhaseContinue];
+    self.momentumDisplayLink = [screen displayLinkWithTarget:self
+                                                    selector:@selector(stepMomentumScroll:)];
+    self.momentumDisplayLink.preferredFrameRateRange = CAFrameRateRangeMake(30, screen.maximumFramesPerSecond, screen.maximumFramesPerSecond);
+    [self.momentumDisplayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
 }
 
 
-- (void)postMomentumWithPhase:(CGMomentumScrollPhase)momentumPhase {
-    CGPoint step = CGPointMake(self.momentumVelocity.x * kMomentumFrameInterval,
-                               self.momentumVelocity.y * kMomentumFrameInterval);
+- (void)stepMomentumScroll:(CADisplayLink *)link {
+    NSTimeInterval t = link.targetTimestamp - self.momentumStartTime;
+    NSTimeInterval duration = TUCMomentumDurationForSpeed(self.momentumInitialSpeed);
+
+    if (t >= duration) {
+        // Emit whatever of the curve is left, then close it, so the total distance travelled is
+        // the distance the curve describes rather than the distance the last whole frame reached.
+        CGFloat remainder = TUCMomentumDistanceAtTime(self.momentumInitialSpeed, duration)
+                          - self.momentumDistanceEmitted;
+        [self stopMomentumDisplayLink];
+        [self postMomentumDistance:remainder phase:kCGMomentumScrollPhaseEnd];
+        return;
+    }
+
+    CGFloat travelled = TUCMomentumDistanceAtTime(self.momentumInitialSpeed, t);
+    CGFloat step = travelled - self.momentumDistanceEmitted;
+    self.momentumDistanceEmitted = travelled;
+
+    [self postMomentumDistance:step phase:kCGMomentumScrollPhaseContinue];
+}
+
+
+- (void)postMomentumDistance:(CGFloat)distance phase:(CGMomentumScrollPhase)momentumPhase {
+    CGPoint step = CGPointMake(self.momentumDirection.x * distance,
+                               self.momentumDirection.y * distance);
 
     [self postMomentumScrollTranslation:step phase:momentumPhase];
 }
 
 
+- (void)stopMomentumDisplayLink {
+    [self.momentumDisplayLink invalidate];
+    self.momentumDisplayLink = nil;
+    self.momentumDistanceEmitted = 0;
+    self.momentumInitialSpeed = 0;
+}
+
+
 - (void)cancelMomentumScroll {
-    if (self.momentumScrollTimer == nil) {
+    if (self.momentumDisplayLink == nil) {
         return;
     }
 
-    [self.momentumScrollTimer invalidate];
-    self.momentumScrollTimer = nil;
-    self.momentumVelocity = CGPointZero;
+    [self stopMomentumDisplayLink];
 
     // Close the phase. A view left waiting for the end of a flick that has already stopped will
     // not settle back out of an overscroll.
