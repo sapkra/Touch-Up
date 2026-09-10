@@ -51,6 +51,11 @@
 @property TUCSurfaceState cursorTouchSurfaceState;
 @property CGPoint cursorTouchSurfaceProbePoint; // relative coordinates, where the probe was fired
 @property BOOL cursorTouchSurfaceIsFrozen; // an action has committed; no late answer may change it
+/// Which branch of the classification produced the surface, in a few words. Diagnostics only —
+/// nothing reads it to decide anything. It exists because "WindowChrome, from the window list" is
+/// six different findings wearing the same name, and telling a title bar from a resize border from
+/// the Dock sitting in front of something is otherwise guesswork.
+@property (strong) NSString *cursorTouchSurfaceReason;
 
 /// Rises once per cursor touch, and never resets.
 ///
@@ -684,6 +689,7 @@ static NSString *TUCNameForDigitizerKind(TUCDigitizerKind kind) {
         self.cursorTouchSurfaceState = TUCSurfaceStateNone;
         self.cursorTouchSurfaceProbePoint = touch.location;
         self.cursorTouchSurfaceIsFrozen = NO;
+        self.cursorTouchSurfaceReason = nil;
     }
 
     [touch setIsOnSurface:isOnSurface];
@@ -1560,9 +1566,12 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
                           // explanation anywhere in the record.
                           self.cursorTouchSurfaceState == TUCSurfaceStateNone
                               ? @""
-                              : [NSString stringWithFormat:@" [%@/%@]",
+                              : [NSString stringWithFormat:@" [%@/%@%@]",
                                  TUCNameForSurface(self.cursorTouchSurface),
-                                 TUCNameForSurfaceSource(self.cursorTouchSurfaceSource)]]];
+                                 TUCNameForSurfaceSource(self.cursorTouchSurfaceSource),
+                                 self.cursorTouchSurfaceReason
+                                    ? [NSString stringWithFormat:@": %@", self.cursorTouchSurfaceReason]
+                                    : @""]]];
     }
 }
 
@@ -2156,6 +2165,7 @@ static const CGFloat kResizeBorderWidth = 8.0;
 - (TUCSurfaceKind)windowSurfaceForPoint:(CGPoint)point locationID:(uint32_t)locationID {
 
     if ([self isPointInMenuBar:point locationID:locationID]) {
+        self.cursorTouchSurfaceReason = @"menu bar";
         return TUCSurfaceKindWindowChrome;
     }
 
@@ -2169,6 +2179,7 @@ static const CGFloat kResizeBorderWidth = 8.0;
     if (probe != NULL) CFRelease(probe);
 
     if (!windowListIsReadable) {
+        self.cursorTouchSurfaceReason = @"window list unreadable";
         [self noteOnceForLocationID:locationID
                                 key:@"window-list-unreadable"
                             message:@"the window list came back empty, so what is under a finger "
@@ -2192,18 +2203,22 @@ static const CGFloat kResizeBorderWidth = 8.0;
     // Our own interface. Emphatically not `Desktop`, which is what "found nothing" would otherwise
     // mean here — that would make the on-screen keyboard draggable and every key press a drag.
     if (hitOwnWindow) {
+        self.cursorTouchSurfaceReason = @"our own window";
         return TUCSurfaceKindUnknown;
     }
 
     // Checked before `found`, because chrome sitting in front of a window is what the finger
     // actually reached.
     if (hitIsChrome) {
+        self.cursorTouchSurfaceReason = [NSString stringWithFormat:@"system chrome in front%@",
+                                         found ? @" of a window" : @", nothing behind"];
         return TUCSurfaceKindWindowChrome;
     }
 
     // Nothing at all under the point. `kCGWindowListExcludeDesktopElements` keeps the desktop's own
     // Finder window out of the list, which is what makes this reliable rather than a guess.
     if (!found) {
+        self.cursorTouchSurfaceReason = @"no window under the point";
         return TUCSurfaceKindDesktop;
     }
 
@@ -2215,10 +2230,13 @@ static const CGFloat kResizeBorderWidth = 8.0;
         && CGRectContainsRect(bounds, CGRectInset(screenBounds, 1, 1));
 
     if (isFullScreen) {
+        self.cursorTouchSurfaceReason = @"window fills the display";
         return TUCSurfaceKindUnknown;
     }
 
     if (point.y < CGRectGetMinY(bounds) + kTitleBarProbeHeight) {
+        self.cursorTouchSurfaceReason = [NSString stringWithFormat:@"title bar (%.0f pt below window top %.0f)",
+                                         point.y - CGRectGetMinY(bounds), CGRectGetMinY(bounds)];
         return TUCSurfaceKindWindowChrome;
     }
 
@@ -2228,9 +2246,12 @@ static const CGFloat kResizeBorderWidth = 8.0;
     if (point.x < CGRectGetMinX(bounds) + kResizeBorderWidth
         || point.x > CGRectGetMaxX(bounds) - kResizeBorderWidth
         || point.y > CGRectGetMaxY(bounds) - kResizeBorderWidth) {
+        self.cursorTouchSurfaceReason = [NSString stringWithFormat:@"resize border of %@",
+                                         NSStringFromRect(NSRectFromCGRect(bounds))];
         return TUCSurfaceKindWindowChrome;
     }
 
+    self.cursorTouchSurfaceReason = @"window interior";
     return TUCSurfaceKindUnknown;
 }
 
@@ -2378,6 +2399,12 @@ static const CGFloat kResizeBorderWidth = 8.0;
                           TUCNameForSurface(self.cursorTouchSurface),
                           TUCNameForSurfaceSource(self.cursorTouchSurfaceSource),
                           TUCNameForSurfaceState(self.cursorTouchSurfaceState)]];
+
+        // Which branch decided it. "WindowChrome from the window list" is six different findings
+        // under one name, and only this tells them apart.
+        if (self.cursorTouchSurfaceReason) {
+            [lines addObject:[NSString stringWithFormat:@"Because:  %@", self.cursorTouchSurfaceReason]];
+        }
     }
 
     uint32_t locationID = self.cursorTouch ? self.cursorTouch.locationID : self.locationIDOfLastTouch;
