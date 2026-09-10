@@ -2338,7 +2338,7 @@ static const CGFloat kResizeBorderWidth = 8.0;
     NSMutableArray<NSString *> *lines = [NSMutableArray array];
 
     if (!self.classifiesSurfaces) {
-        [lines addObject:@"Surfaces: off — every gesture uses its setting"];
+        [lines addObject:@"Surfaces: off — one finger scrolls everywhere"];
     } else {
         // What the finger is on, and how much that is worth. The source is the part worth watching:
         // it is the difference between an answer the element gave and one inferred from a rectangle,
@@ -2465,6 +2465,9 @@ static const CGFloat kResizeBorderWidth = 8.0;
     [report appendFormat:@"errorResistance:      %ld reports\n", (long)self.errorResistance];
     [report appendFormat:@"ignoreOriginTouches:  %@\n", self.ignoreOriginTouches ? @"YES" : @"NO"];
     [report appendFormat:@"classifiesSurfaces:   %@\n", self.classifiesSurfaces ? @"YES" : @"NO"];
+    // Worth stating even though it is off for almost everybody: with it on, nothing scrolls,
+    // drags or zooms anywhere, and a report saying so has no other explanation in this file.
+    [report appendFormat:@"kioskMode:            %@\n", self.kioskMode ? @"YES" : @"NO"];
     [report appendFormat:@"hidesCursor:          %@%@\n",
      self.hidesCursor ? @"YES" : @"NO",
      self.hidesCursor && ![[TUCCursorUtilities sharedInstance] canHideCursorSystemWide]

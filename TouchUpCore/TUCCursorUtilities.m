@@ -24,6 +24,9 @@
 /// Smoothed finger speed in points per second, used to seed a flick when the finger lifts.
 @property CGPoint scrollVelocity;
 @property NSTimeInterval timeOfLastScroll;
+/// Fractions of a point not yet sent. `CGEventCreateScrollWheelEvent2` takes `int32_t` deltas, so
+/// anything under a whole point is lost unless it is carried to the next event.
+@property CGPoint scrollSubPixelRemainder;
 
 /// Unit vector the flick is travelling along. Fixed for the whole of a flick: the curve below
 /// decays a speed, and a flick does not change its mind about direction after the finger has gone.
@@ -35,6 +38,9 @@
 /// How far along the curve has already been emitted, in points. Deltas are the difference between
 /// two evaluations of the closed form rather than an accumulation, so rounding cannot drift.
 @property CGFloat momentumDistanceEmitted;
+/// Whether `kCGMomentumScrollPhaseBegin` has gone out. Every path that closes the flick has to
+/// know, because closing one that was never opened is its own kind of wrong.
+@property BOOL momentumHasBegun;
 @property (strong) CADisplayLink *momentumDisplayLink;
 
 /// Where the drag was last taken. `-currentCursorLocation` cannot be used to release a drag: the
@@ -568,6 +574,31 @@ startingNewClickSequence:(BOOL)startsNewSequence {
 }
 
 
+/**
+ Whole points to send now, keeping the fraction for next time.
+
+ `CGEventCreateScrollWheelEvent2` takes its deltas as `int32_t`, so a translation of 0.6 pt becomes
+ 0 and is gone. That costs more than smoothness: a finger moving slowly, or the tail of a flick,
+ produces a run of events carrying no movement at all — and a zero delta is not something the real
+ driver ever sends. Applications that work out their own inertia from the deltas they receive,
+ Xcode and Finder among them, read those zeroes as the gesture having stopped dead.
+
+ Carrying the remainder means no movement is lost and no empty event is sent: the caller skips
+ posting entirely until a whole point has accumulated.
+ */
+- (CGPoint)wholePointsFromTranslation:(CGPoint)translation {
+    CGPoint carried = CGPointMake(self.scrollSubPixelRemainder.x + translation.x,
+                                  self.scrollSubPixelRemainder.y + translation.y);
+
+    // `trunc` rather than `round`, so the carry keeps the sign of the movement and a slow scroll
+    // never steps backwards.
+    CGPoint whole = CGPointMake(trunc(carried.x), trunc(carried.y));
+
+    self.scrollSubPixelRemainder = CGPointMake(carried.x - whole.x, carried.y - whole.y);
+    return whole;
+}
+
+
 - (void)scroll:(CGPoint)translation phase:(NSTouchPhase)phase {
     [self stopDraggingCursor];
 
@@ -576,20 +607,12 @@ startingNewClickSequence:(BOOL)startsNewSequence {
         return;
     }
 
-    if (!self.isScrolling) {
-        // A fresh drag supersedes whatever the previous flick was still coasting through.
-        [self cancelMomentumScroll];
-
-        self.isScrolling = YES;
-        self.scrollVelocity = CGPointZero;
-        [self postGestureScrollTranslation:translation phase:kCGScrollPhaseBegan];
-    } else {
-        [self postGestureScrollTranslation:translation phase:kCGScrollPhaseChanged];
-    }
-
     // Track speed over time rather than keeping the last delta: reports do not arrive at a fixed
     // rate, and the very last one before the finger leaves the glass is the noisiest there is —
     // seeding a flick from it alone is what makes momentum shoot off or die on the spot.
+    //
+    // Measured from the true translation, not from the whole points actually sent, so a slow
+    // scroll whose reports each round down to nothing still has a speed.
     NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
     NSTimeInterval elapsed = now - self.timeOfLastScroll;
 
@@ -599,6 +622,23 @@ startingNewClickSequence:(BOOL)startsNewSequence {
                                          self.scrollVelocity.y * (1 - smoothing) + (translation.y / elapsed) * smoothing);
     }
     self.timeOfLastScroll = now;
+
+    CGPoint step = [self wholePointsFromTranslation:translation];
+    if (step.x == 0 && step.y == 0) {
+        // Nothing whole to report yet. The gesture is not opened either: `Began` carrying no
+        // movement is the same empty event as any other.
+        return;
+    }
+
+    if (!self.isScrolling) {
+        // A fresh drag supersedes whatever the previous flick was still coasting through.
+        [self cancelMomentumScroll];
+
+        self.isScrolling = YES;
+        [self postGestureScrollTranslation:step phase:kCGScrollPhaseBegan];
+    } else {
+        [self postGestureScrollTranslation:step phase:kCGScrollPhaseChanged];
+    }
 }
 
 
@@ -619,6 +659,7 @@ startingNewClickSequence:(BOOL)startsNewSequence {
 
     self.isScrolling = NO;
     self.scrollVelocity = CGPointZero;
+    self.scrollSubPixelRemainder = CGPointZero;
 
     [self postGestureScrollTranslation:CGPointZero phase:kCGScrollPhaseCancelled];
 }
@@ -671,6 +712,10 @@ static NSTimeInterval TUCMomentumDurationForSpeed(CGFloat initialSpeed) {
     NSTimeInterval sinceLastInput = [NSDate timeIntervalSinceReferenceDate] - self.timeOfLastScroll;
     self.scrollVelocity = CGPointZero;
 
+    // The flick accumulates its own fractions from zero; whatever the finger left over belonged
+    // to the gesture that has just closed.
+    self.scrollSubPixelRemainder = CGPointZero;
+
     // A finger that came to rest before lifting was not throwing anything, however fast it was
     // travelling a moment earlier.
     if (sinceLastInput > kMomentumStaleInputInterval) {
@@ -688,10 +733,13 @@ static NSTimeInterval TUCMomentumDurationForSpeed(CGFloat initialSpeed) {
     self.momentumDirection = CGPointMake(flickVelocity.x / speed, flickVelocity.y / speed);
     self.momentumInitialSpeed = speed;
     self.momentumDistanceEmitted = 0;
+    self.momentumHasBegun = NO;
     self.momentumStartTime = CACurrentMediaTime();
 
-    [self postMomentumDistance:0 phase:kCGMomentumScrollPhaseBegin];
-
+    // `Begin` goes out from the first frame, carrying that frame's distance, rather than from
+    // here carrying nothing. A momentum event with a zero delta is not something the real driver
+    // ever sends, and applications that work out their own inertia — Xcode and Finder do —
+    // estimate it from these deltas, so a zero teaches them the flick has no speed.
     [self startMomentumDisplayLink];
 }
 
@@ -730,46 +778,59 @@ static NSTimeInterval TUCMomentumDurationForSpeed(CGFloat initialSpeed) {
 
     screen = screen ?: [NSScreen mainScreen];
     if (screen == nil) {
-        // Nothing to drive it with. Ending the phase here is better than leaving a view waiting
-        // for the close of a flick that will never be stepped.
-        [self postMomentumDistance:0 phase:kCGMomentumScrollPhaseEnd];
+        // Nothing to drive it with, and nothing has been posted yet, so there is no open phase
+        // to close. The scroll gesture itself already ended cleanly; the flick simply does not
+        // happen.
+        self.momentumInitialSpeed = 0;
         return;
     }
 
+    // Guarded because a range whose minimum exceeds its maximum is not a range. A screen that
+    // reports an implausible refresh rate should cost a smooth flick, not an exception.
+    float maximumFrameRate = MAX(30.0f, (float)screen.maximumFramesPerSecond);
+
     self.momentumDisplayLink = [screen displayLinkWithTarget:self
                                                     selector:@selector(stepMomentumScroll:)];
-    self.momentumDisplayLink.preferredFrameRateRange = CAFrameRateRangeMake(30, screen.maximumFramesPerSecond, screen.maximumFramesPerSecond);
+    self.momentumDisplayLink.preferredFrameRateRange = CAFrameRateRangeMake(30, maximumFrameRate, maximumFrameRate);
     [self.momentumDisplayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
 }
 
 
 - (void)stepMomentumScroll:(CADisplayLink *)link {
-    NSTimeInterval t = link.targetTimestamp - self.momentumStartTime;
     NSTimeInterval duration = TUCMomentumDurationForSpeed(self.momentumInitialSpeed);
+    NSTimeInterval t = link.targetTimestamp - self.momentumStartTime;
 
-    if (t >= duration) {
-        // Emit whatever of the curve is left, then close it, so the total distance travelled is
-        // the distance the curve describes rather than the distance the last whole frame reached.
-        CGFloat remainder = TUCMomentumDistanceAtTime(self.momentumInitialSpeed, duration)
-                          - self.momentumDistanceEmitted;
-        [self stopMomentumDisplayLink];
-        [self postMomentumDistance:remainder phase:kCGMomentumScrollPhaseEnd];
-        return;
-    }
-
-    CGFloat travelled = TUCMomentumDistanceAtTime(self.momentumInitialSpeed, t);
-    CGFloat step = travelled - self.momentumDistanceEmitted;
+    // The last frame samples the curve at its end rather than past it, so the flick travels
+    // exactly the distance the curve describes instead of stopping at whatever the last whole
+    // frame happened to reach.
+    BOOL isLastFrame = (t >= duration);
+    CGFloat travelled = TUCMomentumDistanceAtTime(self.momentumInitialSpeed,
+                                                  isLastFrame ? duration : t);
+    CGFloat advance = travelled - self.momentumDistanceEmitted;
     self.momentumDistanceEmitted = travelled;
 
-    [self postMomentumDistance:step phase:kCGMomentumScrollPhaseContinue];
-}
+    CGPoint step = [self wholePointsFromTranslation:
+                        CGPointMake(self.momentumDirection.x * advance,
+                                    self.momentumDirection.y * advance)];
 
+    if (step.x != 0 || step.y != 0) {
+        CGMomentumScrollPhase phase = self.momentumHasBegun ? kCGMomentumScrollPhaseContinue
+                                                            : kCGMomentumScrollPhaseBegin;
+        self.momentumHasBegun = YES;
+        [self postMomentumScrollTranslation:step phase:phase];
+    }
 
-- (void)postMomentumDistance:(CGFloat)distance phase:(CGMomentumScrollPhase)momentumPhase {
-    CGPoint step = CGPointMake(self.momentumDirection.x * distance,
-                               self.momentumDirection.y * distance);
+    if (isLastFrame) {
+        BOOL hadBegun = self.momentumHasBegun;
+        [self stopMomentumDisplayLink];
 
-    [self postMomentumScrollTranslation:step phase:momentumPhase];
+        // A flick too small to have moved a whole point never opened a momentum phase, and
+        // opening and closing one to carry nothing would be noise.
+        if (hadBegun) {
+            // Zero deltas, which is what closes a flick — the movement went out above.
+            [self postMomentumScrollTranslation:CGPointZero phase:kCGMomentumScrollPhaseEnd];
+        }
+    }
 }
 
 
@@ -778,6 +839,8 @@ static NSTimeInterval TUCMomentumDurationForSpeed(CGFloat initialSpeed) {
     self.momentumDisplayLink = nil;
     self.momentumDistanceEmitted = 0;
     self.momentumInitialSpeed = 0;
+    self.momentumHasBegun = NO;
+    self.scrollSubPixelRemainder = CGPointZero;
 }
 
 
@@ -786,11 +849,14 @@ static NSTimeInterval TUCMomentumDurationForSpeed(CGFloat initialSpeed) {
         return;
     }
 
+    BOOL hadBegun = self.momentumHasBegun;
     [self stopMomentumDisplayLink];
 
-    // Close the phase. A view left waiting for the end of a flick that has already stopped will
-    // not settle back out of an overscroll.
-    [self postMomentumScrollTranslation:CGPointZero phase:kCGMomentumScrollPhaseEnd];
+    // Close the phase, but only if one was ever opened. A view left waiting for the end of a
+    // flick that has already stopped will not settle back out of an overscroll.
+    if (hadBegun) {
+        [self postMomentumScrollTranslation:CGPointZero phase:kCGMomentumScrollPhaseEnd];
+    }
 }
 
 

@@ -7,16 +7,31 @@ The goal of Touch Up was to provide a simple, general-purpose driver that enable
 The code in this repository provides a user-space driver that reads and processes the HID data into a set of touches and different utilities to inject mouse events into the system.
 
 ## What can you do with this App?
-The Touch Up **utility app** allows you to control your Mac with any connected touch screen. Touch Up supports clicks, dragging, scrolling, and pinch-to-zoom.
-While the behavior of the driver is customizable, the default setting was inspired by iPadOS:
+The Touch Up **utility app** lets you control your Mac with any connected touchscreen. It behaves
+the way an iPad does, and there is nothing to configure to get that — the gestures are fixed:
 
-- Tap anywhere on the screen to click objects
-- Scroll content by flicking over the screen
-- Drag contents by briefly resting your finger before moving it
-- Zoom content by pinching two fingers
-- Secondary clicks can be performed with two fingers
-- You can even enable touching a window to move it to the front like Stage Manager on iPadOS does
+- **Tap** to click. Tap a window that is not in front and it comes forward *and* acts on what you
+  touched, in one tap.
+- **Drag one finger** to scroll. Touch Up asks what is under your finger first, so the same flick
+  scrolls a web page, moves a window by its title bar, slides a slider, and drags an icon around
+  the desktop.
+- **Hold still** to open the right-click menu. Hold in a text field and you start selecting text
+  instead.
+- **Drag two fingers** to drag anything, for the places where nothing can be read well enough to
+  tell.
+- **Pinch two fingers** to zoom.
+- **Sweep three fingers** to move between desktops, up for Mission Control, down for the app's
+  windows.
+- There is **no mouse pointer**. Touching hides it; moving a mouse or trackpad brings it straight
+  back.
+- An **on-screen keyboard** can rise by itself when you tap somewhere you can type, for a machine
+  with no keyboard attached.
 
+The settings window is for the things Touch Up cannot work out on its own: which panel maps to
+which display, and how the glass is oriented on it.
+
+### Requirements
+macOS 26 or later.
 
 ### Installing the App
 - Compile the app or [download the latest notarized build here](https://github.com/shueber/Touch-Up/releases).
