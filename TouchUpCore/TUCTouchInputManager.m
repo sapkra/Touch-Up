@@ -1666,6 +1666,12 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
         case TUCSurfaceKindUnknown:
             return TUCCursorActionScroll;
     }
+
+    // A surface outside the enumeration cannot happen, and if it ever does, falling off the end
+    // of this function would hand back whatever happened to be in the return register — which is
+    // as likely to be a drag as anything else. Scrolling is the answer that costs nothing to be
+    // wrong about.
+    return TUCCursorActionScroll;
 }
 
 
@@ -2038,6 +2044,13 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
 
     CFArrayRef array = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly|kCGWindowListExcludeDesktopElements, kCGNullWindowID);
 
+    // No list at all is not an empty desktop, it is no answer — and `CFArrayGetCount(NULL)` is a
+    // crash rather than a zero. The caller has to be able to tell the two apart, because one of
+    // them is allowed to start a drag and the other must never be.
+    if (array == NULL) {
+        return NO;
+    }
+
     // The window list is ordered front-to-back by window *level* (not grouped by app), so
     // high-level overlays — including our own screenSaver-level panels — come before the
     // active app's normal windows. `behindFrontmostWindow` flips once we pass the active
@@ -2144,6 +2157,24 @@ static const CGFloat kResizeBorderWidth = 8.0;
 
     if ([self isPointInMenuBar:point locationID:locationID]) {
         return TUCSurfaceKindWindowChrome;
+    }
+
+    // "Nothing under the finger" is only worth acting on if the question could be asked at all.
+    // The desktop is one of the two surfaces trusted to start a drag without the accessibility
+    // tree confirming it — see `-canStartDragInContext:` — and that trust rests entirely on the
+    // window list being authoritative. An unreadable or empty list is not an empty desktop, and
+    // treating it as one turns every touch anywhere into a drag.
+    CFArrayRef probe = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly|kCGWindowListExcludeDesktopElements, kCGNullWindowID);
+    BOOL windowListIsReadable = (probe != NULL && CFArrayGetCount(probe) > 0);
+    if (probe != NULL) CFRelease(probe);
+
+    if (!windowListIsReadable) {
+        [self noteOnceForLocationID:locationID
+                                key:@"window-list-unreadable"
+                            message:@"the window list came back empty, so what is under a finger "
+                                     "cannot be established from geometry. One finger scrolls "
+                                     "everywhere as a result; it will not drag windows or icons."];
+        return TUCSurfaceKindUnknown;
     }
 
     CGRect bounds = CGRectZero;
