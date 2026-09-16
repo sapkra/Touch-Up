@@ -16,6 +16,7 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/hid/IOHIDManager.h>
 #include <IOKit/hidsystem/IOHIDUserDevice.h>
+#include <IOKit/hidsystem/IOHIDLib.h>
 #include <dispatch/dispatch.h>
 #include <mach/mach_time.h>
 #include <stdio.h>
@@ -87,6 +88,20 @@ static void SetStr(CFMutableDictionaryRef d, const char *k, const char *v) {
 #pragma mark - Reading a real panel's descriptor
 
 static int DumpRealDescriptor(const char *outPath) {
+    // Enumerating real devices is *listening* to input, which Input Monitoring gates.
+    // Without it the device list comes back empty — which reads exactly like "nothing is
+    // plugged in", and the two must not be confused.
+    IOHIDAccessType access = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent);
+    if (access != kIOHIDAccessTypeGranted) {
+        printf("Input Monitoring is %s for this process.\n",
+               access == kIOHIDAccessTypeDenied ? "DENIED" : "not granted");
+        printf("Requesting it now — approve the prompt, then run this again.\n");
+        printf("(System Settings > Privacy & Security > Input Monitoring, for the app you\n");
+        printf(" launched this from, usually Terminal.)\n");
+        IOHIDRequestAccess(kIOHIDRequestTypeListenEvent);
+        return 3;
+    }
+
     IOHIDManagerRef mgr = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
     if (!mgr) { fprintf(stderr, "IOHIDManagerCreate failed\n"); return 1; }
 
@@ -107,7 +122,8 @@ static int DumpRealDescriptor(const char *outPath) {
     IOHIDManagerOpen(mgr, kIOHIDOptionsTypeNone);
     CFSetRef devices = IOHIDManagerCopyDevices(mgr);
     if (!devices || CFSetGetCount(devices) == 0) {
-        printf("no digitizer attached — B4 (cloned real descriptor) will be skipped\n");
+        printf("no digitizer found, and Input Monitoring IS granted — so nothing is plugged in.\n");
+        printf("B4 (cloned real descriptor) will be skipped\n");
         if (devices) CFRelease(devices);
         return 2;
     }
