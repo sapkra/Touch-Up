@@ -168,6 +168,14 @@ run_variant B5 descriptors/mt-vendor-ff60.bin      0xFF60 7 "Touch Up" "--mt-pro
 run_variant B6 descriptors/mt-vendor-ff60.bin      0xFF60 7 "Touch Up" "--mt-props --geometry --family 106"
 run_variant B7 descriptors/sidecar-touchscreen.bin 0x0D   4 "Apple"    "--geometry"
 
+# The configuration nobody had tried: an ordinary Windows-style touchscreen, announced
+# honestly, fed reports in the shape such a panel actually sends. Round 3 showed that
+# NSScreen reports touch capability for any 0x0D/0x04 device even when the multitouch
+# driver never adopts it — so the generic HID driver, not AppleMultitouchHIDService, may
+# be the path that matters. B2 was this test with the wrong descriptor and the wrong
+# reports.
+run_variant B8 descriptors/standard-touchscreen.bin 0x0D  4 "Touch Up" "--layout standard"
+
 say "Summary"
 cat results/SUMMARY.txt
 echo

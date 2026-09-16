@@ -1,6 +1,6 @@
 # Virtual digitizer spike (E2)
 
-## What to do next (round 2)
+## What to do next (round 4)
 
 Everything is prepared. On the test Mac — the one already booted with
 `amfi_get_out_of_my_way=1`, nothing to set up again:
@@ -13,25 +13,29 @@ cd <this directory>       # after pulling the branch, or copying it across again
 Then send back `results/`. That is the whole task; roughly two minutes, hands off the
 machine while it runs. No touchscreen, no iPad, no gestures.
 
-It now runs seven variants instead of four. B1–B4 are a repeat of round 1. The new ones,
-B5–B7, are the point: round 1 showed that a device *is* adopted by the multitouch driver
-but then emits nothing, and that the multitouch device it creates has none of the
-properties describing a physical surface. B5–B7 repeat the two shapes that were adopted,
-with that geometry filled in, to find out whether it was the missing piece.
+**B8 is the one that matters now.** Everything before it chased adoption by the
+multitouch driver. Round 3 showed that is probably the wrong door: `NSScreen` reports the
+display as touch-capable for *any* device with TouchScreen usage `0x0D/0x04`, including
+one the multitouch driver never adopted and the generic `AppleUserHIDEventDriver` handled
+instead. So B8 publishes an ordinary Windows-style touchscreen — standard tip switch,
+contact identifier, 16-bit X/Y, contact count — announces it honestly, and feeds reports
+in the shape such a panel really sends. That combination had never been tried: the
+earlier variants all used Apple's non-standard descriptor or the wrong report layout.
 
-The geometry values are copied from your own machine's trackpad, read out of the round-1
-dumps — surface 11897 × 8044, 18 rows × 24 columns, plus the opaque descriptor blobs.
-They live in `AddSensorGeometry()` in `src/vhid.c`; nothing to edit.
+The others still run, so nothing already established is lost.
 
 What the outcomes mean:
 
-- **direct touches > 0 on any variant** — the idea works and the native path is open.
-  That is the moment to request the entitlement from Apple.
-- **claimed, still nothing** — geometry was not the missing piece, and what remains is
-  Apple's multitouch frame format, which is undocumented. Worth stopping to weigh against
-  filing a Feedback Assistant report instead; see FINDINGS.md.
-- **B6 behaves differently from B5** — `Family ID` matters, which tells us the parser is
-  choosing a per-family report format and names the next thing to chase.
+- **B8 delivers touches** — the whole thing works, needs no entitlement games and no
+  multitouch protocol, and Touch Up's job becomes republishing the panel as a proper
+  touchscreen. This is the good case, and it is now the likely one.
+- **B8 is claimed by nothing and delivers nothing** — direct touch needs more than a
+  well-formed digitizer, most likely an association with a display that we have not set.
+- **Touches arrive but land on the wrong screen or the wrong place** — that is the display
+  association problem, and a good problem to have.
+
+No touchscreen needs to be connected: B8 invents the device and the reports, like every
+other variant.
 
 Read FINDINGS.md for what round 1 established, including why Sidecar cannot be copied.
 

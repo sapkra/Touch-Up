@@ -180,6 +180,59 @@ static void PackSidecarReport(uint8_t *out, const Contact *contacts, size_t coun
     // bytes 14..80 stay zero: the 63-byte 0xFF1A blob and the trailing vendor fields.
 }
 
+#define kStandardReportLength 14
+
+/**
+ A report in the ordinary shape a Windows-style touchscreen sends.
+
+ The point of contrast with Sidecar's layout: standard digitizer usages — tip switch,
+ in-range, contact identifier, 16-bit X/Y, contact count — which is what the generic
+ AppleUserHIDEventDriver knows how to parse.
+ */
+static void PackStandardReport(uint8_t *out, const Contact *contacts, size_t count) {
+    memset(out, 0, kStandardReportLength);
+    out[0] = 1;   // report ID
+
+    for (size_t i = 0; i < 2; i++) {
+        uint8_t *slot = out + 1 + (i * 6);
+        if (i < count) {
+            const Contact *c = &contacts[i];
+            slot[0] = (uint8_t)((c->touching ? 0x01 : 0x00) | (c->touching ? 0x02 : 0x00));
+            slot[1] = c->index;
+            slot[2] = (uint8_t)(c->x & 0xFF);  slot[3] = (uint8_t)(c->x >> 8);
+            slot[4] = (uint8_t)(c->y & 0xFF);  slot[5] = (uint8_t)(c->y >> 8);
+        }
+    }
+    out[13] = (uint8_t)count;
+}
+
+static void FeedStandardSweep(IOHIDUserDeviceRef dev) {
+    uint8_t report[kStandardReportLength];
+    const int frames = 60;
+    printf("feeding %d frames of a two-contact sweep (standard digitizer layout)...\n", frames);
+    fflush(stdout);
+
+    for (int i = 0; i < frames; i++) {
+        double t = (double)i / (double)(frames - 1);
+        uint16_t x = (uint16_t)(0x1000 + t * 0x5000);
+        uint16_t y = (uint16_t)(0x1000 + t * 0x4000);
+        Contact contacts[2] = {
+            { .index = 1, .touching = true, .x = x, .y = y },
+            { .index = 2, .touching = true, .x = (uint16_t)(x + 0x0800), .y = y },
+        };
+        PackStandardReport(report, contacts, 2);
+        IOReturn r = IOHIDUserDeviceHandleReportWithTimeStamp(dev, mach_absolute_time(),
+                                                             report, sizeof(report));
+        if (r != kIOReturnSuccess && i == 0) printf("  HandleReport returned 0x%08x\n", r);
+        usleep(16000);
+    }
+
+    PackStandardReport(report, NULL, 0);
+    IOHIDUserDeviceHandleReportWithTimeStamp(dev, mach_absolute_time(), report, sizeof(report));
+    printf("sweep done\n");
+    fflush(stdout);
+}
+
 static void FeedSidecarSweep(IOHIDUserDeviceRef dev) {
     uint8_t report[kSidecarReportLength];
     const int frames = 60;
@@ -215,7 +268,7 @@ int main(int argc, char **argv) {
         return DumpRealDescriptor(argv[2]);
     }
 
-    const char *descPath = NULL, *manufacturer = "Touch Up";
+    const char *descPath = NULL, *manufacturer = "Touch Up", *layout = "auto";
     int usagePage = 0x0D, usage = 0x04, hold = 25, family = 0;
     bool mtProps = false, feed = false, geometry = false;
 
@@ -228,12 +281,14 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--family")        && i + 1 < argc) family       = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--mt-props"))                      mtProps      = true;
         else if (!strcmp(argv[i], "--geometry"))                      geometry     = true;
+        else if (!strcmp(argv[i], "--layout")        && i + 1 < argc) layout       = argv[++i];
         else if (!strcmp(argv[i], "--feed"))                          feed         = true;
     }
     if (!descPath) {
         fprintf(stderr,
             "usage: %s --desc <file> [--usage-page N] [--usage N] [--manufacturer S]\n"
-            "          [--mt-props] [--geometry] [--family N] [--feed] [--hold seconds]\n"
+            "          [--mt-props] [--geometry] [--family N] [--layout standard|sidecar]\n"
+            "          [--feed] [--hold seconds]\n"
             "       %s --dump-real <out.bin>\n", argv[0], argv[0]);
         return 2;
     }
@@ -290,7 +345,9 @@ int main(int argc, char **argv) {
     CFRunLoopRunInMode(kCFRunLoopDefaultMode, 3.0, false);
 
     if (feed) {
-        if (usagePage == 0x0D && descLen == 256) {
+        if (!strcmp(layout, "standard")) {
+            FeedStandardSweep(dev);
+        } else if (!strcmp(layout, "sidecar") || (usagePage == 0x0D && descLen == 256)) {
             FeedSidecarSweep(dev);
         } else {
             printf("no known report layout for this descriptor; publishing only\n");
