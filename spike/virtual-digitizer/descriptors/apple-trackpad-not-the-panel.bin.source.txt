@@ -1,0 +1,12 @@
+Not the touchscreen. This is an Apple trackpad, identified by decoding it:
+
+  Mouse collection, report ID 0x02, three buttons and signed X/Y
+  Digitizer / TouchPad (0x0D/0x05) with a 16-byte vendor blob on report ID 0x3F
+  Vendor image channel on report ID 0x44, 0x4AF bytes
+
+which is the Magic Trackpad 2 shape — the same one TUCVirtualTrackpad.c emulates, differing
+only in the size of that image channel (0x4AF against the 0x56B we publish).
+
+Renamed out of the way because run-spike.sh treats descriptors/real-panel.bin as the panel
+under test, and a variant that believes it is cloning a touchscreen while actually cloning a
+trackpad has already wasted a round of this once.

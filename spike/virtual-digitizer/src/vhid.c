@@ -129,59 +129,92 @@ static int DumpRealDescriptor(const char *outPath) {
         return 2;
     }
 
+    int status = 2;
     CFIndex count = CFSetGetCount(devices);
     const void **list = calloc((size_t)count, sizeof(void *));
     CFSetGetValues(devices, list);
 
-    int status = 2;
+    // Every candidate, then a choice — rather than the first thing found.
+    //
+    // An Apple trackpad matches the digitizer page as readily as a touchscreen does, and
+    // taking whatever turned up first meant two separate captures came back with a laptop's
+    // own pointing device while the record claimed they were an external panel. So Apple's
+    // own devices are skipped outright, exactly as the driver itself skips them, and a
+    // TouchScreen is preferred over a TouchPad when both are present.
+    printf("digitizer-page devices found:\n");
+
+    IOHIDDeviceRef chosen = NULL;
+    int chosenUsage = 0;
+    char chosenProduct[256] = "", chosenManufacturer[256] = "";
+
     for (CFIndex i = 0; i < count; i++) {
         IOHIDDeviceRef dev = (IOHIDDeviceRef)list[i];
-        CFTypeRef desc = IOHIDDeviceGetProperty(dev, CFSTR("ReportDescriptor"));
-        CFTypeRef product = IOHIDDeviceGetProperty(dev, CFSTR("Product"));
-        CFTypeRef manufacturer = IOHIDDeviceGetProperty(dev, CFSTR("Manufacturer"));
 
         char productBuf[256] = "(unnamed)", manufacturerBuf[256] = "(none)";
+        CFTypeRef product = IOHIDDeviceGetProperty(dev, CFSTR("Product"));
+        CFTypeRef manufacturer = IOHIDDeviceGetProperty(dev, CFSTR("Manufacturer"));
         if (product && CFGetTypeID(product) == CFStringGetTypeID())
             CFStringGetCString(product, productBuf, sizeof(productBuf), kCFStringEncodingUTF8);
         if (manufacturer && CFGetTypeID(manufacturer) == CFStringGetTypeID())
             CFStringGetCString(manufacturer, manufacturerBuf, sizeof(manufacturerBuf), kCFStringEncodingUTF8);
 
-        if (desc && CFGetTypeID(desc) == CFDataGetTypeID()) {
-            CFIndex len = CFDataGetLength(desc);
-            printf("real digitizer: \"%s\" by \"%s\", descriptor %ld bytes\n",
-                   productBuf, manufacturerBuf, (long)len);
+        long vendorID = 0, usage = 0;
+        CFTypeRef vendor = IOHIDDeviceGetProperty(dev, CFSTR("VendorID"));
+        CFTypeRef primaryUsage = IOHIDDeviceGetProperty(dev, CFSTR("PrimaryUsage"));
+        if (vendor && CFGetTypeID(vendor) == CFNumberGetTypeID())
+            CFNumberGetValue((CFNumberRef)vendor, kCFNumberLongType, &vendorID);
+        if (primaryUsage && CFGetTypeID(primaryUsage) == CFNumberGetTypeID())
+            CFNumberGetValue((CFNumberRef)primaryUsage, kCFNumberLongType, &usage);
 
-            // Whose descriptor this is matters as much as the bytes. Taking the first
-            // match silently once meant a whole variant cloned a laptop's own trackpad
-            // while everyone believed it was testing an external touchscreen.
-            if (strstr(productBuf, "Internal") || strstr(productBuf, "Trackpad")
-                || strstr(manufacturerBuf, "Apple")) {
-                printf("\n  ** WARNING: that looks like a built-in or Apple pointing device,\n");
-                printf("  ** not an external touchscreen. If you meant to capture a\n");
-                printf("  ** touchscreen, connect it and run this again.\n\n");
+        bool isApple = (vendorID == 0x05AC);
+        const char *kind = (usage == 4) ? "TouchScreen" : (usage == 5) ? "TouchPad" : "Digitizer";
+
+        printf("  %-34s by %-22s vendor 0x%04lX  %s%s\n",
+               productBuf, manufacturerBuf, vendorID, kind,
+               isApple ? "   [skipped: Apple's own]" : "");
+
+        if (isApple) continue;
+        if (chosen && chosenUsage == 4 && usage != 4) continue;   // keep the touchscreen
+
+        chosen = dev;
+        chosenUsage = (int)usage;
+        strlcpy(chosenProduct, productBuf, sizeof(chosenProduct));
+        strlcpy(chosenManufacturer, manufacturerBuf, sizeof(chosenManufacturer));
+    }
+
+    if (!chosen) {
+        printf("\nNo third-party digitizer here — only Apple's own, which are not what this wants.\n");
+        printf("Connect the touchscreen and run this again.\n");
+        free(list);
+        CFRelease(devices);
+        return 2;
+    }
+
+    CFTypeRef desc = IOHIDDeviceGetProperty(chosen, CFSTR("ReportDescriptor"));
+    if (desc && CFGetTypeID(desc) == CFDataGetTypeID()) {
+        CFIndex len = CFDataGetLength(desc);
+        printf("\nchosen: \"%s\" by \"%s\", descriptor %ld bytes\n",
+               chosenProduct, chosenManufacturer, (long)len);
+
+        FILE *f = fopen(outPath, "wb");
+        if (f) {
+            fwrite(CFDataGetBytePtr(desc), 1, (size_t)len, f);
+            fclose(f);
+            printf("wrote %s\n", outPath);
+
+            char notePath[1024];
+            snprintf(notePath, sizeof(notePath), "%s.source.txt", outPath);
+            FILE *n = fopen(notePath, "w");
+            if (n) {
+                fprintf(n, "captured from: \"%s\" by \"%s\" (%ld bytes, usage %d)\n",
+                        chosenProduct, chosenManufacturer, (long)len, chosenUsage);
+                fclose(n);
+                printf("wrote %s\n", notePath);
             }
-
-            FILE *f = fopen(outPath, "wb");
-            if (f) {
-                fwrite(CFDataGetBytePtr(desc), 1, (size_t)len, f);
-                fclose(f);
-                printf("wrote %s\n", outPath);
-
-                // Record what it came from, beside the bytes.
-                char notePath[1024];
-                snprintf(notePath, sizeof(notePath), "%s.source.txt", outPath);
-                FILE *n = fopen(notePath, "w");
-                if (n) {
-                    fprintf(n, "captured from: \"%s\" by \"%s\" (%ld bytes)\n",
-                            productBuf, manufacturerBuf, (long)len);
-                    fclose(n);
-                    printf("wrote %s\n", notePath);
-                }
-                status = 0;
-            }
-            break;
+            status = 0;
         }
-        printf("digitizer \"%s\" exposes no ReportDescriptor property\n", productBuf);
+    } else {
+        printf("\n\"%s\" exposes no ReportDescriptor property.\n", chosenProduct);
     }
 
     free(list);
