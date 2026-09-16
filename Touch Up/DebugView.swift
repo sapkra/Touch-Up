@@ -101,11 +101,7 @@ struct DebugView: View {
                     Text("or by mouse-clicking here")
                 }
                 .font(.largeTitle)
-                .modify {
-                    if #available(macOS 13.0, *) {
-                        $0.fontDesign(.rounded)
-                    } else { $0 }
-                }
+                .fontDesign(.rounded)
             })
             .foregroundColor(.gray)
             .buttonStyle(.borderless)
@@ -120,12 +116,5 @@ struct DebugView: View {
 struct DebugView_Previews: PreviewProvider {
     static var previews: some View {
         DebugView(model: TouchUp(), locationID: nil, closeAction: {})
-    }
-}
-
-
-extension View {
-    func modify<T: View>(@ViewBuilder _ modifier: (Self) -> T) -> some View {
-        return modifier(self)
     }
 }

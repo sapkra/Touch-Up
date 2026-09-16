@@ -41,6 +41,8 @@ macOS 26 or later.
 
 
 ### Compatibility
+Touch Up requires **macOS 27 or later**. Older releases of macOS are supported by Touch Up 1.x.
+
 Touch Up should work with any touchscreen that also works with Windows.
 We used the following screens for testing:
 

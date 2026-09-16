@@ -73,9 +73,7 @@ static const CGFloat kAssumedPointsPerMM = 4.5;
         // but a hardware-mirrored secondary has no NSScreen — fall back to its EDID product
         // name (read by display ID, independent of mirroring), then to a generic label.
         NSScreen *ownScreen = [TUCScreen systemScreenForDisplayID:displayID];
-        if (@available(macOS 10.15, *)) {
-            self.name = ownScreen.localizedName;
-        }
+        self.name = ownScreen.localizedName;
         if (self.name == nil) {
             self.name = [self edidNameForDisplayID:displayID];
         }
