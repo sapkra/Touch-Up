@@ -366,36 +366,78 @@ bool TUCVirtualTrackpadIsPublished(void) {
     return gDevice != NULL;
 }
 
-bool TUCVirtualTrackpadIsDriven(void) {
-    if (!gDevice) return false;
+/// Whether `service` or anything below it is one of the multitouch drivers.
+static bool SubtreeHasMultitouchDriver(io_service_t service, int depth) {
+    if (depth > 6) {
+        return false;
+    }
 
-    // The multitouch device the driver creates carries our serial number, which is the
-    // cheapest proof that something adopted us rather than merely that we exist.
+    io_name_t className = "";
+    if (IOObjectGetClass(service, className) == KERN_SUCCESS) {
+        if (strcmp(className, "AppleMultitouchTrackpadHIDEventDriver") == 0
+            || strcmp(className, "AppleMultitouchDevice") == 0
+            || strcmp(className, "AppleMultitouchHIDService") == 0) {
+            return true;
+        }
+    }
+
+    io_iterator_t children = IO_OBJECT_NULL;
+    if (IORegistryEntryGetChildIterator(service, kIOServicePlane, &children) != KERN_SUCCESS) {
+        return false;
+    }
+
+    bool found = false;
+    io_service_t child;
+    while (!found && (child = IOIteratorNext(children))) {
+        found = SubtreeHasMultitouchDriver(child, depth + 1);
+        IOObjectRelease(child);
+    }
+    IOObjectRelease(children);
+    return found;
+}
+
+
+/**
+ Whether the multitouch driver has adopted our device.
+
+ Asked by walking down from the device itself, found by the serial number nothing else
+ carries. The obvious shortcut — look for a multitouch device and check whose it is — does
+ not work: on this path the multitouch device exposes no serial at all, so there is nothing
+ on it to compare against, and a real Magic Trackpad attached to the same Mac would look
+ exactly like success. Which is worth spelling out, because the first version of this did
+ precisely that and reported failure every time while the trackpad underneath was working.
+ */
+bool TUCVirtualTrackpadIsDriven(void) {
+    if (!gDevice) {
+        return false;
+    }
+
+    CFMutableDictionaryRef matching = IOServiceMatching("IOHIDDevice");
+    if (!matching) {
+        return false;
+    }
+
+    CFMutableDictionaryRef properties = CFDictionaryCreateMutable(NULL, 0,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionarySetValue(properties, CFSTR("SerialNumber"), CFSTR(kVirtualSerialNumber));
+    CFDictionarySetValue(matching, CFSTR(kIOPropertyMatchKey), properties);
+    CFRelease(properties);
+
     io_iterator_t iterator = IO_OBJECT_NULL;
-    if (IOServiceGetMatchingServices(kIOMainPortDefault,
-                                     IOServiceMatching("AppleMultitouchDevice"),
-                                     &iterator) != KERN_SUCCESS) {
+    if (IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator) != KERN_SUCCESS) {
         return false;
     }
 
     bool driven = false;
-    io_service_t service;
-    while (!driven && (service = IOIteratorNext(iterator))) {
-        CFTypeRef serial = IORegistryEntryCreateCFProperty(service,
-                                                           CFSTR("Multitouch Serial Number"),
-                                                           kCFAllocatorDefault, 0);
-        if (serial) {
-            if (CFGetTypeID(serial) == CFStringGetTypeID()
-                && CFStringCompare((CFStringRef)serial, CFSTR(kVirtualSerialNumber), 0) == kCFCompareEqualTo) {
-                driven = true;
-            }
-            CFRelease(serial);
-        }
-        IOObjectRelease(service);
+    io_service_t device;
+    while (!driven && (device = IOIteratorNext(iterator))) {
+        driven = SubtreeHasMultitouchDriver(device, 0);
+        IOObjectRelease(device);
     }
     IOObjectRelease(iterator);
     return driven;
 }
+
 
 #pragma mark - Gestures
 

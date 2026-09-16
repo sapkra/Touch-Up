@@ -368,21 +368,46 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     // nothing, in which case every gesture sent to it disappears without a word. So the
     // answer is checked rather than assumed, and a device nobody wanted is given back.
     self.nativeGestureGeneration++;
-    NSUInteger generation = self.nativeGestureGeneration;
+    [self waitForNativeGestureAdoptionWithGeneration:self.nativeGestureGeneration
+                                         attemptsLeft:10];
+}
 
+
+/**
+ Waits for macOS to pick the device up, rather than glancing once and giving up.
+
+ Adoption is not instant and not fixed: the driver interrogates the device first, and how
+ long that takes is its business. A single look after three seconds turns an ordinary slow
+ start into a permanent failure, so this asks every half second for five seconds and stops
+ at the first yes.
+
+ The generation is what keeps a check from an earlier attempt from passing judgement on a
+ later one — turning the setting off and straight back on leaves the old sequence in flight,
+ and it would otherwise retire a device published a moment ago.
+ */
+- (void)waitForNativeGestureAdoptionWithGeneration:(NSUInteger)generation
+                                      attemptsLeft:(NSInteger)attemptsLeft {
     __weak typeof(self) weakSelf = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf || !strongSelf->_usesNativeGestures
             || strongSelf.nativeGestureGeneration != generation) {
             return;
         }
+
         if (TUCVirtualTrackpadIsDriven()) {
             strongSelf.nativeGesturesConfirmedLive = YES;
             [strongSelf logGesture:@"native gestures live — macOS is driving the trackpad"];
             return;
         }
+
+        if (attemptsLeft > 1) {
+            [strongSelf waitForNativeGestureAdoptionWithGeneration:generation
+                                                     attemptsLeft:attemptsLeft - 1];
+            return;
+        }
+
         strongSelf->_usesNativeGestures = NO;
         TUCVirtualTrackpadRetire();
         [strongSelf reportNativeGesturesUnavailable:
