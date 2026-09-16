@@ -54,7 +54,15 @@ def devices(path: str) -> list:
             "line": start + 1,
             "manufacturer": _field(text, r'"Manufacturer" = "([^"]*)"'),
             "usage": _field(text, r'"DeviceUsagePairs" = (\(.*?\))'),
-            "claimed": "AppleMultitouchHIDService" in text,
+            # Two ways in, found the hard way: the touchscreen-ish personalities bind
+            # AppleMultitouchHIDService, while a device that looks like a Magic Trackpad
+            # gets AppleMultitouchTrackpadHIDEventDriver instead. Only the second one has
+            # ever produced input.
+            "claimed": ("AppleMultitouchHIDService" in text
+                        or "AppleMultitouchTrackpadHIDEventDriver" in text),
+            "driver": ("AppleMultitouchTrackpadHIDEventDriver"
+                       if "AppleMultitouchTrackpadHIDEventDriver" in text
+                       else ("AppleMultitouchHIDService" if "AppleMultitouchHIDService" in text else "")),
             "generic": "AppleUserHIDEventDriver" in text,
             # Geometry the multitouch stack needs before a contact means anything.
             "sensor": sorted(set(re.findall(r'"(Sensor [^"]+|Family ID|MTHIDDevice)"', text))),
@@ -77,7 +85,7 @@ def main() -> int:
     claimed_any = False
     for d in found:
         if d["claimed"]:
-            verdict, claimed_any = "CLAIMED by AppleMultitouchHIDService", True
+            verdict, claimed_any = f"CLAIMED by {d['driver']}", True
         elif d["generic"]:
             verdict = "generic AppleUserHIDEventDriver only"
         else:

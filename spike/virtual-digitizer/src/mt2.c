@@ -183,8 +183,10 @@ static size_t BuildReport(uint8_t *out, const Finger *fingers, size_t count,
 
 int main(int argc, char **argv) {
     int hold = 25;
+    const char *gesture = "drag";
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--hold") && i + 1 < argc) hold = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--gesture") && i + 1 < argc) gesture = argv[++i];
     }
 
     CFMutableDictionaryRef props = CFDictionaryCreateMutable(NULL, 0,
@@ -258,31 +260,48 @@ int main(int argc, char **argv) {
     const int frames = 90;
     uint32_t ms = 100;
 
-    printf("feeding %d frames of a one-finger drag...\n", frames);
+    // One finger moves the pointer; two fingers scroll and never move it. That difference
+    // is the whole basis of the hybrid: absolute positioning stays with the existing
+    // event synthesis, and only multi-finger gestures are handed to this device.
+    bool twoFingers = (strcmp(gesture, "scroll") == 0);
+    printf("feeding %d frames of a %s...\n", frames, twoFingers ? "two-finger scroll" : "one-finger drag");
     fflush(stdout);
 
     for (int i = 0; i < frames; i++) {
         double t = (double)i / (double)(frames - 1);
-        // Centred coordinates, as a real Magic Trackpad 2 reports them.
-        Finger f = {
-            .x = (int16_t)(-2000 + t * 4000),
-            .y = (int16_t)(-1000 + t * 2000),
-            .identifier = 1,
-            .state = (i == 0) ? kStateStart : kStateActive,
-        };
-        size_t length = BuildReport(report, &f, 1, ms, true);
+        Finger fingers[2];
+        size_t count = twoFingers ? 2 : 1;
+
+        if (twoFingers) {
+            // Both fingers travel together up the surface: a scroll, not a drag.
+            int16_t y = (int16_t)(-1500 + t * 3000);
+            fingers[0] = (Finger){ .x = -600, .y = y, .identifier = 1,
+                                   .state = (i == 0) ? kStateStart : kStateActive };
+            fingers[1] = (Finger){ .x =  600, .y = y, .identifier = 2,
+                                   .state = (i == 0) ? kStateStart : kStateActive };
+        } else {
+            fingers[0] = (Finger){ .x = (int16_t)(-2000 + t * 4000),
+                                   .y = (int16_t)(-1000 + t * 2000), .identifier = 1,
+                                   .state = (i == 0) ? kStateStart : kStateActive };
+        }
+
+        size_t length = BuildReport(report, fingers, count, ms, true);
         IOHIDUserDeviceHandleReportWithTimeStamp(dev, mach_absolute_time(), report, (CFIndex)length);
         ms += 8;
         usleep(8000);
     }
 
     // VoodooInput's liftoff: zeroed sizes, then inactive, then a bare header.
-    Finger lift = { .x = 2000, .y = 1000, .identifier = 1, .state = kStateStop };
+    size_t liftCount = twoFingers ? 2 : 1;
+    Finger lift[2] = {
+        { .x = twoFingers ? -600 : 2000, .y = 1500, .identifier = 1, .state = kStateStop },
+        { .x = 600, .y = 1500, .identifier = 2, .state = kStateStop },
+    };
     IOHIDUserDeviceHandleReportWithTimeStamp(dev, mach_absolute_time(), report,
-                                             (CFIndex)BuildReport(report, &lift, 1, ms += 10, true));
-    lift.state = kStateInactive;
+                                             (CFIndex)BuildReport(report, lift, liftCount, ms += 10, true));
+    lift[0].state = lift[1].state = kStateInactive;
     IOHIDUserDeviceHandleReportWithTimeStamp(dev, mach_absolute_time(), report,
-                                             (CFIndex)BuildReport(report, &lift, 1, ms += 10, false));
+                                             (CFIndex)BuildReport(report, lift, liftCount, ms += 10, false));
     IOHIDUserDeviceHandleReportWithTimeStamp(dev, mach_absolute_time(), report,
                                              (CFIndex)BuildReport(report, NULL, 0, ms += 10, false));
 

@@ -212,6 +212,25 @@ printf 'C1   interrogation=%s/%s pointer=%-3s touches=%s  (Magic Trackpad 2 emul
   "$C1_GET" "$C1_SET" \
   "$([ "$C1_PTR" -gt 0 ] && echo yes || echo no)" "$C1_TOUCH" >> results/SUMMARY.txt
 
+# C3. The variant the hybrid actually depends on. One finger on a trackpad moves the
+# pointer, which we do NOT want — absolute positioning stays with the existing synthesis.
+# Two fingers scroll and leave the pointer alone, which is exactly the division of labour
+# the hybrid proposes. Success here is a scroll arriving with the pointer unmoved.
+say "Variant C3 — two-finger scroll on the emulated trackpad"
+if [ -x bin/gesturetest ]; then ./bin/gesturetest 30 > results/C3.gesture.log 2>&1 & sleep 2; fi
+./bin/mt2 --gesture scroll --hold 12 > results/C3.publish.log 2>&1 &
+C3PID=$!
+sleep 8
+{ echo "=== ioreg -c AppleMultitouchDevice ==="; ioreg -c AppleMultitouchDevice -r -l -w0; } > results/C3.ioreg.log 2>&1
+wait $C3PID 2>/dev/null
+pkill -f "bin/gesturetest" 2>/dev/null
+C3_PTR=$(grep -c "POINTER MOVED" results/C3.publish.log)
+C3_SCROLL=0; [ -f results/C3.gesture.log ] && C3_SCROLL=$(grep -c "scrollWheel" results/C3.gesture.log)
+note "pointer moved:      $([ "$C3_PTR" -gt 0 ] && echo "yes (unwanted for scroll)" || echo "no (correct)")"
+note "scroll events seen: $C3_SCROLL"
+printf 'C3   pointer=%-3s scrollEvents=%s  (two-finger scroll; pointer should NOT move)\n' \
+  "$([ "$C3_PTR" -gt 0 ] && echo yes || echo no)" "$C3_SCROLL" >> results/SUMMARY.txt
+
 # C2. The other reading of the disassembly: usage 7 on Apple's multitouch vendor page as
 # the inbound counterpart of usage 6, carrying 96-byte MTContact records directly.
 run_variant C2 descriptors/mt-vendor-ff60.bin      0xFF60 7 "Touch Up" "--mt-props --geometry --layout contacts"
