@@ -9,6 +9,6 @@
 set -u
 cd "$(dirname "$0")"
 mkdir -p bin descriptors
-clang -O2 -o bin/vhid-probe src/vhid.c -framework CoreFoundation -framework IOKit || exit 1
+clang -O2 -o bin/vhid-probe src/vhid.c -framework CoreFoundation -framework IOKit -framework CoreGraphics || exit 1
 codesign --force --sign - bin/vhid-probe || exit 1
 ./bin/vhid-probe --dump-real descriptors/real-panel.bin

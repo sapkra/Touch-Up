@@ -28,7 +28,7 @@ command -v clang >/dev/null  || { echo "clang not found — install Xcode Comman
 command -v swiftc >/dev/null || { echo "swiftc not found — install Xcode Command Line Tools"; exit 1; }
 
 say "Build"
-clang -O2 -o bin/vhid src/vhid.c -framework CoreFoundation -framework IOKit || exit 1
+clang -O2 -o bin/vhid src/vhid.c -framework CoreFoundation -framework IOKit -framework CoreGraphics || exit 1
 note "bin/vhid"
 swiftc -O -o bin/touchcaps src/touchcaps.swift 2>/dev/null \
   && note "bin/touchcaps" || note "touchcaps failed to build (needs the macOS 27 SDK) — oracle 1 unavailable"
