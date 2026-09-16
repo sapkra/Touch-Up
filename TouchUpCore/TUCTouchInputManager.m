@@ -189,21 +189,34 @@ static const NSTimeInterval kFingerCountSettleTime = 0.08;
 /**
  How far the virtual trackpad is told the fingers moved, against how far they really did.
 
- A trackpad is small and a touchscreen is not. Mapping the glass onto the pad one for one
- means a finger crossing a fifth of a 32-inch panel — a long, deliberate drag — arrives as
- three centimetres of trackpad, which macOS scrolls accordingly and which feels like
- wading. On a touchscreen the content is expected to keep up with the finger.
+ Measured in millimetres on both sides, which is the only way it can mean anything. The
+ first version scaled the *normalised* movement, so the same number behaved differently on
+ every panel: a fifth of a 22-inch screen and a fifth of a 55-inch screen are the same
+ fraction and nothing like the same distance, and the larger the panel the slower it felt.
+ The glass's real size is known — `TUCScreen` reads it from the display's EDID — so the
+ travel is converted through it, and the virtual pad's own surface is a size we declare.
 
- So translation is amplified. Not without limit: the pad has edges, and a gesture that runs
- off one stops moving, exactly as a finger running off a real trackpad does. At this gain a
- gesture has about six centimetres of panel to travel in before it reaches the edge, which
- is a generous flick, and long distances are covered the way they are on any trackpad —
- by flicking again, or by letting the momentum carry.
+ At 1.0 the virtual fingers move exactly as far as the real ones. Above that they move
+ further, which is what a touchscreen wants: on glass the content is expected to keep up
+ with the finger, and a trackpad is a small surface being asked to stand in for a large one.
 
- Only the *travel* is scaled. The distance between the fingers is passed through untouched,
- so a pinch zooms by what the fingers actually did rather than by two and a half times it.
+ The cost of raising it is travel. The pad has edges at ±78 mm from where a gesture opened,
+ so at this value a gesture has about 52 mm of glass to move through before the fingers run
+ off the far side of a pad that is not really there. Long distances are covered the way they
+ are on any trackpad: flick, let it carry, flick again.
+
+ What this cannot do is make the content follow the finger exactly, because the other half
+ of the sum belongs to macOS — it applies its own scroll acceleration, which is a curve, is
+ adjustable in System Settings, and is not visible from here. So this is the number to turn
+ if gestures feel wrong, and no amount of measuring the panel will remove the need to.
  */
-static const CGFloat kNativeGestureGain = 2.5;
+static const CGFloat kNativeGestureGain = 1.5;
+
+/// The surface we tell macOS the trackpad has, in millimetres — 0x3CF0 and 0x2B20 in
+/// hundredths, as answered during the interrogation. Movement has to be expressed as a
+/// fraction of this, so the two have to agree.
+static const CGFloat kVirtualPadWidthMM = 156.0;
+static const CGFloat kVirtualPadHeightMM = 110.4;
 
 /**
  How long since its last report a contact is abandoned and no longer treated as a finger on the
@@ -495,20 +508,32 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
         [self logGesture:@"  native gesture began"];
     }
 
-    // The fingers start in the middle of the pad and move from there, amplified. Reporting
-    // where they are on the glass instead would spend the pad's travel before the gesture
-    // began — fingers landing near an edge would have almost none left — and would scale
-    // every movement down to the ratio between a large panel and a small trackpad.
-    CGPoint travel = CGPointMake((panelCentroid.x - self.nativeGestureOrigin.x) * kNativeGestureGain,
-                                 (panelCentroid.y - self.nativeGestureOrigin.y) * kNativeGestureGain);
+    // How big the glass actually is. Everything below is in millimetres because of it; a
+    // panel that will not say falls back to a guessed size, which is wrong but wrong
+    // consistently, and `-physicalSizeSource` says so in the diagnostics.
+    TUCScreen *screen = [self touchscreenForLocationID:contributing.firstObject.locationID];
+    CGSize panelMM = screen ? [screen effectivePhysicalSize] : CGSizeZero;
+    if (panelMM.width <= 0.0 || panelMM.height <= 0.0) {
+        panelMM = CGSizeMake(kVirtualPadWidthMM, kVirtualPadHeightMM);   // as if one to one
+    }
+
+    // The fingers start in the middle of the pad and move from there. Reporting where they
+    // are on the glass instead would spend the pad's travel before the gesture began —
+    // fingers landing near an edge would have almost none left.
+    CGFloat travelMMx = (panelCentroid.x - self.nativeGestureOrigin.x) * panelMM.width * kNativeGestureGain;
+    CGFloat travelMMy = (panelCentroid.y - self.nativeGestureOrigin.y) * panelMM.height * kNativeGestureGain;
 
     TUCVirtualContact contacts[4];
     size_t count = 0;
     for (TUCTouch *touch in contributing) {
-        // Each finger keeps its real offset from the centre, so their separation — which is
-        // what a pinch is made of — arrives unaltered.
-        contacts[count].x = 0.5 + travel.x + (touch.location.x - panelCentroid.x);
-        contacts[count].y = 0.5 + travel.y + (touch.location.y - panelCentroid.y);
+        // Each finger keeps its real separation from the centre, unscaled and in the same
+        // millimetres, because that separation is what a pinch is made of — amplifying it
+        // would zoom by half again as much as the fingers asked for.
+        CGFloat offsetMMx = (touch.location.x - panelCentroid.x) * panelMM.width;
+        CGFloat offsetMMy = (touch.location.y - panelCentroid.y) * panelMM.height;
+
+        contacts[count].x = 0.5 + (travelMMx + offsetMMx) / kVirtualPadWidthMM;
+        contacts[count].y = 0.5 + (travelMMy + offsetMMy) / kVirtualPadHeightMM;
         contacts[count].identifier = (uint8_t)((labs((long)touch.contactID) % 15) + 1);
         count++;
     }
