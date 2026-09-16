@@ -47,6 +47,12 @@
 /// Set once the watchdog has seen macOS adopt the trackpad. Cached rather than asked for
 /// each time: answering it means a registry scan, and the question is asked per report.
 @property BOOL nativeGesturesConfirmedLive;
+
+/// Rises every time native gestures are switched on, so the check scheduled by one attempt
+/// cannot pass judgement on a later one. Turning the setting off and straight back on
+/// leaves the first check still in flight, and it would otherwise retire a device published
+/// a moment ago and announce that macOS had refused it.
+@property NSUInteger nativeGestureGeneration;
 @property NSTimeInterval cursorTouchBeganTime; // when the cursor touch landed, for concurrency tests
 
 /// What the cursor touch landed on, how well that is known, and where it was asked about.
@@ -361,11 +367,15 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     // Publishing is not the same as being driven: the device can exist and be adopted by
     // nothing, in which case every gesture sent to it disappears without a word. So the
     // answer is checked rather than assumed, and a device nobody wanted is given back.
+    self.nativeGestureGeneration++;
+    NSUInteger generation = self.nativeGestureGeneration;
+
     __weak typeof(self) weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         typeof(self) strongSelf = weakSelf;
-        if (!strongSelf || !strongSelf->_usesNativeGestures) {
+        if (!strongSelf || !strongSelf->_usesNativeGestures
+            || strongSelf.nativeGestureGeneration != generation) {
             return;
         }
         if (TUCVirtualTrackpadIsDriven()) {

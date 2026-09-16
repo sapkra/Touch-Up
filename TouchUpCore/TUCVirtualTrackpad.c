@@ -9,6 +9,7 @@
 #include <IOKit/IOKitLib.h>
 #include <IOKit/hidsystem/IOHIDUserDevice.h>
 #include <dispatch/dispatch.h>
+#include <Block.h>
 #include <mach/mach_time.h>
 #include <string.h>
 
@@ -58,7 +59,23 @@ static const uint8_t kReportDescriptor[] = {
 static IOHIDUserDeviceRef gDevice;
 static dispatch_queue_t gQueue;
 static bool gGestureInFlight;
-static uint32_t gTimestampMilliseconds;
+
+/// The fingers as last reported, so the gesture can be ended where they actually were.
+/// Lifting from anywhere else is a real movement as far as the system is concerned, and a
+/// long one arriving in a single frame is read as a flick.
+static TUCVirtualContact gLastContacts[kMaxContacts];
+static size_t gLastContactCount;
+
+/// Real elapsed time, not a count of frames.
+///
+/// The system works out how fast a gesture was moving from the distance between frames and
+/// the time between them, so inventing the time invents the speed with it: a panel
+/// reporting at 60 Hz would appear to move twice as fast as it did, and the momentum of
+/// every flick would be wrong in proportion. Which defeats the point of handing gestures
+/// over in the first place.
+static uint64_t gPublishTime;
+static mach_timebase_info_data_t gTimebase;
+static uint32_t gLastTimestamp;
 
 /// The block the driver last named, before asking for it. File scope rather than captured,
 /// because the two report handlers are separate blocks that have to agree about it.
@@ -104,7 +121,16 @@ static size_t AnswerDirect(uint32_t reportID, uint8_t *out, size_t capacity) {
     #undef EMIT
 }
 
-/// Every block at once, each behind a little-endian length.
+/**
+ Every block at once, each behind a little-endian length.
+
+ Two things here are not quite right and are kept anyway. The blob is 72 bytes while the
+ length announced for it is 0x49, and the trailing 0x7F block carries no length prefix
+ where every other block does. Both are inherited from VoodooInput, both are plainly
+ inconsistent, and the driver accepts them: it read this aggregate, asked for nothing more,
+ and switched the device into multitouch mode. Tidying an undocumented protocol on the
+ strength of it looking untidy is how a working handshake stops working.
+ */
 static size_t AnswerAggregate(uint8_t *out, size_t capacity) {
     static const uint8_t blob[] = {
         0xDB, 0x01, 0x02, 0x00,
@@ -162,6 +188,20 @@ static void SetString(CFMutableDictionaryRef properties, const char *key, const 
     CFRelease(text);
 }
 
+/// Milliseconds since the device was published, never repeating: two frames inside the
+/// same millisecond would otherwise carry the same stamp, and the stack discards a frame
+/// whose timestamp it has already seen.
+static uint32_t ElapsedMilliseconds(void) {
+    uint64_t elapsed = mach_absolute_time() - gPublishTime;
+    uint32_t milliseconds = (uint32_t)((elapsed * gTimebase.numer) / (gTimebase.denom * 1000000ULL));
+    if (milliseconds <= gLastTimestamp) {
+        milliseconds = gLastTimestamp + 1;
+    }
+    gLastTimestamp = milliseconds;
+    return milliseconds;
+}
+
+
 /// Contacts are centred on the surface and the vertical axis runs the other way, so a
 /// finger near the top of the glass is a large positive Y here.
 static void PackFinger(uint8_t *out, const TUCVirtualContact *contact, uint8_t state) {
@@ -202,12 +242,10 @@ static size_t BuildFrame(uint8_t *out, const TUCVirtualContact *contacts, size_t
     out[7] = anythingActive ? 0x03 : 0x02;
     out[8] = 0x31;                              // the multitouch report inside this one
 
-    // Must advance, every time. The stack discards frames whose timestamp repeats, and a
-    // stalled clock reads to it as a device that has stopped saying anything new.
-    gTimestampMilliseconds += 8;
-    out[9]  = (uint8_t)((gTimestampMilliseconds << 3) | 0x4);
-    out[10] = (uint8_t)((gTimestampMilliseconds >> 5) & 0xFF);
-    out[11] = (uint8_t)((gTimestampMilliseconds >> 13) & 0xFF);
+    uint32_t milliseconds = ElapsedMilliseconds();
+    out[9]  = (uint8_t)((milliseconds << 3) | 0x4);
+    out[10] = (uint8_t)((milliseconds >> 5) & 0xFF);
+    out[11] = (uint8_t)((milliseconds >> 13) & 0xFF);
 
     for (size_t i = 0; i < count; i++) {
         PackFinger(out + kHeaderLength + (i * kFingerLength), &contacts[i], state);
@@ -275,12 +313,35 @@ bool TUCVirtualTrackpadPublish(void) {
             return kIOReturnSuccess;
         });
 
-    gQueue = dispatch_queue_create("de.schafe.touchup.virtualtrackpad", DISPATCH_QUEUE_SERIAL);
+    // One queue for the life of the process. Publishing and retiring can happen repeatedly
+    // as the setting is turned on and off, and a fresh queue each time would be one leaked
+    // each time — this file is plain C, so nothing reclaims it.
+    static dispatch_once_t queueOnce;
+    dispatch_once(&queueOnce, ^{
+        gQueue = dispatch_queue_create("de.schafe.touchup.virtualtrackpad", DISPATCH_QUEUE_SERIAL);
+    });
     IOHIDUserDeviceSetDispatchQueue(gDevice, gQueue);
+
+    // Released here and nowhere else. The header is explicit that the reference may only be
+    // let go once cancellation has finished, because the asynchronous machinery is still
+    // holding it until then; releasing at the point of cancelling is a use-after-free that
+    // would land on whoever turned the setting off mid-interrogation.
+    IOHIDUserDeviceRef device = gDevice;
+    dispatch_block_t cancelHandler = dispatch_block_create(0, ^{
+        CFRelease(device);
+    });
+    IOHIDUserDeviceSetCancelHandler(gDevice, cancelHandler);
+    Block_release(cancelHandler);
+
     IOHIDUserDeviceActivate(gDevice);
 
     gGestureInFlight = false;
-    gTimestampMilliseconds = 100;
+    gLastContactCount = 0;
+    gLastTimestamp = 0;
+    gPublishTime = mach_absolute_time();
+    if (gTimebase.denom == 0) {
+        mach_timebase_info(&gTimebase);
+    }
 
     LogToHIDDiagnostics("virtual trackpad: published");
     return true;
@@ -290,11 +351,13 @@ void TUCVirtualTrackpadRetire(void) {
     if (!gDevice) return;
 
     TUCVirtualTrackpadLiftoff();
+
+    // The cancel handler owns the release; letting go of the reference here as well would
+    // be one release too many.
     IOHIDUserDeviceCancel(gDevice);
-    CFRelease(gDevice);
     gDevice = NULL;
-    gQueue = NULL;
     gGestureInFlight = false;
+    gLastContactCount = 0;
 
     LogToHIDDiagnostics("virtual trackpad: retired");
 }
@@ -339,10 +402,15 @@ bool TUCVirtualTrackpadIsDriven(void) {
 void TUCVirtualTrackpadSubmit(const TUCVirtualContact *contacts, size_t count) {
     if (!gDevice || count == 0) return;
 
+    if (count > kMaxContacts) count = kMaxContacts;
+
     uint8_t frame[kHeaderLength + (kMaxContacts * kFingerLength)];
     uint8_t state = gGestureInFlight ? kStateActive : kStateStart;
     size_t length = BuildFrame(frame, contacts, count, state, true);
     SendFrame(frame, length);
+
+    memcpy(gLastContacts, contacts, count * sizeof(TUCVirtualContact));
+    gLastContactCount = count;
     gGestureInFlight = true;
 }
 
@@ -352,12 +420,21 @@ void TUCVirtualTrackpadLiftoff(void) {
     // Three reports, as a real one ends: the contacts stop, then go inactive, then the
     // frame carries nobody at all. Without the full sequence the paths stay open and the
     // next gesture is read as a continuation of this one.
-    TUCVirtualContact resting = { .x = 0.5, .y = 0.5, .identifier = 1 };
+    //
+    // Every finger that was down, at the position it was last seen at. Ending a two-finger
+    // scroll with one invented contact in the middle of the surface would be a finger
+    // travelling half the pad in a single frame — a flick nobody made — and would leave the
+    // other finger's path open, never having been told it ended.
     uint8_t frame[kHeaderLength + (kMaxContacts * kFingerLength)];
+    size_t count = gLastContactCount;
 
-    SendFrame(frame, BuildFrame(frame, &resting, 1, kStateStop, true));
-    SendFrame(frame, BuildFrame(frame, &resting, 1, kStateInactive, false));
+    if (count > 0) {
+        SendFrame(frame, BuildFrame(frame, gLastContacts, count, kStateStop, true));
+        SendFrame(frame, BuildFrame(frame, gLastContacts, count, kStateInactive, false));
+    }
     SendFrame(frame, BuildFrame(frame, NULL, 0, kStateInactive, false));
+
+    gLastContactCount = 0;
 
     gGestureInFlight = false;
 }

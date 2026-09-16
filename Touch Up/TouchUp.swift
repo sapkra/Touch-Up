@@ -431,17 +431,25 @@ extension TouchUp: TUCTouchDelegate {
         digitizerConfigs[locationID]?.isFlippedVertically ?? false
     }
 
-    /// The user put a finger on a different panel. Anything showing on the glass should follow them
-    /// there rather than stay on a screen they have walked away from.
     /// Native gestures were asked for and could not be had. The core has already turned the
     /// setting off by the time this arrives, so the switch is brought back into line and the
     /// reason is put where the person who flipped it will see it.
+    ///
+    /// Deferred to the next turn of the run loop, and it has to be. The common failure —
+    /// the app not being entitled to publish a device — happens synchronously inside the
+    /// sink observing this very property, and `@Published` announces a change *before*
+    /// storing it. Setting it to false from in there means the original assignment lands
+    /// afterwards and wins: the switch reads on, saves as on, and controls nothing.
     @objc func nativeGesturesDidBecomeUnavailable(_ reason: String) {
-        isNativeGesturesEnabled = false
-        nativeGesturesUnavailableReason = reason
+        DispatchQueue.main.async { [weak self] in
+            self?.isNativeGesturesEnabled = false
+            self?.nativeGesturesUnavailableReason = reason
+        }
     }
 
 
+    /// The user put a finger on a different panel. Anything showing on the glass should follow them
+    /// there rather than stay on a screen they have walked away from.
     @objc func lastTouchedDigitizerDidChange(_ locationID: UInt32) {
         keyboard.lastTouchedScreenDidChange()
     }
