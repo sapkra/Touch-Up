@@ -113,12 +113,17 @@ run_variant() {
   created=$(grep -c "RESULT: created" "$out.publish.log")
   claimed=$(grep -c -i "AppleMultitouch" "$out.ioreg.log")
   multitouch=$(grep -c "SOME SCREEN REPORTS MULTITOUCH" "$out.touchcaps.log" 2>/dev/null || echo 0)
-  gestures=$(grep -c "recognizer fired\|PAN recognizer" "$out.gesture.log" 2>/dev/null || echo 0)
+  # Only touch-driven callbacks count. A mouse click fires the click recognizer too,
+  # so counting every callback would turn a stray click into a false positive.
+  gestures=$(grep -c "SOURCE=directTouch" "$out.gesture.log" 2>/dev/null || echo 0)
+  local mouseish
+  mouseish=$(grep -c "SOURCE=mouse" "$out.gesture.log" 2>/dev/null || echo 0)
 
   note "created:            $([ "$created" -gt 0 ] && echo YES || echo "NO — kernel refused")"
   note "AppleMultitouch:    $([ "$claimed" -gt 0 ] && echo "YES ($claimed mentions)" || echo NO)"
   note "screen multitouch:  $([ "$multitouch" -gt 0 ] && echo YES || echo no)"
-  note "gestures received:  $gestures"
+  note "direct touches:     $gestures"
+  note "mouse-driven:       $mouseish  (emulated, or you touched the mouse)"
 
   printf '%-4s created=%-3s claimed=%-3s multitouch=%-3s gestures=%s\n' \
     "$name" \

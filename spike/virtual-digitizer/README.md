@@ -97,9 +97,23 @@ Optional, for variant B4 — run this on whichever Mac has the touchscreen plugg
 ./capture-panel.sh
 ```
 
-Heads-up: the script feeds synthetic touch reports and opens a test window. If a device
-*is* claimed, those touches may move the pointer or click things. Don't run it while
-something important is on screen.
+### What you do NOT need
+
+- **No touchscreen plugged into the test Mac.** The spike invents a device and feeds it
+  invented reports; no physical panel is involved. The only reason to touch real hardware
+  is `capture-panel.sh` for variant B4, and that runs on whichever Mac the panel is
+  already connected to.
+- **No gestures by hand.** Nothing to swipe or tap. The test window is there to *receive*
+  synthetic touches, not to be touched.
+
+In fact, keep your hands off the machine while it runs, roughly 2 minutes. An
+`NSClickGestureRecognizer` fires for ordinary mouse clicks as well as touches, so a stray
+click lands in the same log. The harness labels every callback `SOURCE=directTouch` or
+`SOURCE=mouse(...)` and only counts the former, but leaving the machine alone keeps the
+evidence clean either way.
+
+Heads-up: if a device *is* claimed, the synthetic touches may move the pointer or click
+things. Don't run it while something important is on screen.
 
 ## The variants
 
@@ -122,8 +136,11 @@ B1 and B2 are also fed a two-contact sweep in Sidecar's 81-byte report layout (s
 - **claimed** — an `AppleMultitouch` service bound to it. **This is the answer.** Claimed
   means the native path is reachable; unclaimed everywhere means it is closed.
 - **multitouch** — some `NSScreen` reports multi-touch capability.
-- **gestures** — how many gesture-recognizer callbacks the test window received. Non-zero
-  means real touches arrived, which is the strongest possible result.
+- **direct touches** — gesture-recognizer callbacks driven by a real `NSEventTypeDirectTouch`
+  event. Non-zero means touches genuinely arrived: the strongest possible result.
+- **mouse-driven** — callbacks driven by mouse events instead. Expected to be zero if you
+  left the machine alone; if it is not, either AppKit's automatic mouse emulation is
+  translating our touches (itself a positive finding) or someone clicked.
 
 The interesting failure is **claimed but zero gestures**: the OS took the device and then
 could not parse its reports. For B4 that would confirm that cloning a real panel's

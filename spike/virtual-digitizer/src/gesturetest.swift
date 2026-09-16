@@ -15,12 +15,23 @@ final class TouchView: NSView {
         super.touchesBegan(with: event)
     }
 
+    /// Which kind of event drove a recognizer callback.
+    ///
+    /// This matters more than it looks: NSClickGestureRecognizer fires for an ordinary
+    /// mouse click too, so without this a stray click on the window reads as "native
+    /// touch works". NSEventTypeDirectTouch is 37.
+    private func source() -> String {
+        guard let event = NSApp.currentEvent else { return "SOURCE=unknown" }
+        if event.type.rawValue == 37 { return "SOURCE=directTouch" }
+        return "SOURCE=mouse(type=\(event.type.rawValue))"
+    }
+
     @objc func handleClick(_ g: NSClickGestureRecognizer) {
-        log("CLICK recognizer fired at \(g.location(in: self))")
+        log("CLICK recognizer fired at \(g.location(in: self)) \(source())")
     }
 
     @objc func handlePan(_ g: NSPanGestureRecognizer) {
-        log("PAN recognizer \(g.state.rawValue) at \(g.location(in: self)) translation \(g.translation(in: self))")
+        log("PAN recognizer \(g.state.rawValue) at \(g.location(in: self)) translation \(g.translation(in: self)) \(source())")
     }
 
     override func mouseDown(with event: NSEvent) {
