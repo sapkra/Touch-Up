@@ -182,3 +182,61 @@ over HID, so native scroll, pinch and swipe might be reachable that way. It woul
 indirect input — relative pointer motion, losing the absolute "touch what you want" premise
 unless combined with the current synthesis — and it still requires the same undocumented
 protocol. Worth remembering, not worth starting today.
+
+## Round 6 — it works
+
+Emulating a Magic Trackpad 2 succeeds where six rounds of touchscreens failed.
+
+**C1 — one finger.** The driver interrogated the device (`GET 0x00`, `SET 0x01`+selector,
+`GET 0x01`, `GET 0xDB` → 72 bytes, `GET 0x7F`, then `SET 0x02` to enable multitouch),
+believed the answers, and **moved the pointer 700 points**. `AppleMultitouchTrackpadHIDEventDriver`
+bound the device — a driver no earlier round reached — and the `AppleMultitouchDevice` it
+created carries 68 properties instead of 11, every sensor value read back from our replies:
+
+```
+Family ID = 129          Sensor Rows = 22        Sensor Columns = 30
+Sensor Surface Width = 15600   Sensor Surface Height = 11040
+Sensor Surface Descriptor = <f03c0000202b000044e352ffbd1ee426>    (our bytes)
+```
+
+The silence through rounds 1–5 was never a protocol we couldn't guess. It was a
+conversation we never answered: no get-report handler was registered at all, so the driver
+asked what the device was, heard nothing, and waited.
+
+**C3 — two fingers.** 112 scroll events, and **the pointer did not move** (2264,210 →
+2264,210). The phases tell the story:
+
+```
+phase=1  ×  1     began
+phase=4  × 65     changed
+phase=8  ×  1     ended
+phase=0  × 45     momentum, decaying to dy=0
+```
+
+macOS generated the momentum itself. That is the machinery `TUCCursorUtilities`
+hand-rolls today — velocity smoothing, flick seeding, sub-pixel carry, cancellation — all
+of it replaced by the system's own, with correct per-application behaviour for free.
+
+**C2 is dead.** Feeding 96-byte `MTContact` records on usage 7 was adopted and silent.
+The Magic Trackpad route is the live one.
+
+## The hybrid is real
+
+The division of labour holds exactly as hoped, and is now measured rather than assumed:
+
+| Fingers | Path | Evidence |
+|---|---|---|
+| One | Existing CGEvent synthesis — absolute positioning, clicks, drags, surface classification | C1: a single finger on a trackpad *moves the pointer*, which is why it must not go here |
+| Two or more | Virtual Magic Trackpad — native scroll, pinch, rotate, swipes | C3: scroll delivered, pointer untouched, momentum from the system |
+
+What it costs, stated plainly:
+
+- The entitlement `com.apple.developer.hid.virtual.device` is required, and AMFI enforces
+  it, so development needs either the grant or a reduced-security machine. It is now worth
+  requesting: we can show it works.
+- The device must claim to be Apple hardware — vendor `0x05AC`, product `0x0265`,
+  "Magic Trackpad 2" — because that is what the trackpad driver matches. Unlike the earlier
+  manufacturer-string question, there is no honest variant of this known. It is a decision
+  to take deliberately, not a detail.
+- The protocol is private and undocumented. It will break without warning, so the watchdog
+  fallback to synthesis is mandatory, not optional.
