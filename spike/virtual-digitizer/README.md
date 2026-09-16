@@ -33,20 +33,41 @@ This lowers the machine's security. Do it on a spare Mac, and undo it afterwards
 
 **Apple Silicon**
 
+Reduced Security is not the target — **Permissive Security** is. Custom boot args are
+gated separately, as `bputil -h` on this machine spells out:
+
+```
+-a, --disable-boot-args-restriction
+    Enables sending custom boot args to the kernel
+    Automatically downgrades to Permissive Security mode if not already true
+```
+
+The two checkboxes in the Startup Security Utility's Reduced Security pane are **not**
+needed and do not help here. They correspond to `bputil -m` (MDM management of software
+updates and kernel extensions) and `bputil -k` (trust in third-party kexts) — this spike
+loads no kernel extension.
+
 1. Shut down. Hold the power button until "Loading startup options" appears.
 2. **Options → Continue**, pick the system disk, authenticate.
-3. **Utilities → Startup Security Utility**, select the system disk, **Security Policy…**,
-   choose **Reduced Security**.
-4. **Utilities → Terminal**, then `csrutil disable` and confirm.
-5. Reboot into macOS, then:
+3. **Utilities → Terminal**, then `csrutil disable` and confirm. This is the step that
+   matters; it moves the policy to Permissive Security. (The GUI offers only Full and
+   Reduced — Permissive is reached from the command line.)
+4. Reboot into macOS, then:
 
 ```
 sudo nvram boot-args=amfi_get_out_of_my_way=1
 sudo reboot
 ```
 
+If the `nvram` write is refused or the boot arg does not take effect, enable it
+explicitly and reboot again:
+
+```
+sudo bputil -a
+```
+
 **Intel**: boot recovery with ⌘R, `csrutil disable` in Terminal, reboot, then the same
-`nvram` command.
+`nvram` command. There is no `bputil` and no policy checkbox to worry about.
 
 Do not take the recovery UI wording above as exact — it moves between releases. The
 reliable check is the script itself: `run-spike.sh` refuses to continue and tells you if
