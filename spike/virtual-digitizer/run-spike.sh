@@ -43,6 +43,10 @@ codesign --force --sign - --entitlements vhid.entitlements bin/vhid || exit 1
 codesign --force --sign - bin/vhid-probe || exit 1
 note "signed bin/vhid (entitled) and bin/vhid-probe (plain)"
 
+say "Clearing any leftovers from an earlier run"
+pkill -x vhid 2>/dev/null && sleep 2
+note "done"
+
 say "Gate check: can an entitled binary even run here?"
 ./bin/vhid --desc descriptors/mt-vendor-ff60.bin --usage-page 0xFF60 --usage 7 --hold 1 >/dev/null 2>&1
 GATE=$?
@@ -94,10 +98,10 @@ run_variant() {
 
   {
     echo "=== ioreg -c IOHIDUserDevice ==="
-    ioreg -c IOHIDUserDevice -r -w0
+    ioreg -c IOHIDUserDevice -r -l -w0
     echo
     echo "=== ioreg -c AppleMultitouchDevice ==="
-    ioreg -c AppleMultitouchDevice -r -w0
+    ioreg -c AppleMultitouchDevice -r -l -w0
     echo
     echo "=== hidutil list ==="
     hidutil list 2>/dev/null
@@ -108,30 +112,40 @@ run_variant() {
   wait $vpid 2>/dev/null
   pkill -f "bin/gesturetest" 2>/dev/null
 
-  # Verdicts
-  local created claimed multitouch gestures
+  # Verdicts. grep -c always prints a count, so no "|| echo 0" — that appended a second
+  # line and put a stray 0 in the summary.
+  local created claimed multitouch gestures mouseish
   created=$(grep -c "RESULT: created" "$out.publish.log")
-  claimed=$(grep -c -i "AppleMultitouch" "$out.ioreg.log")
-  multitouch=$(grep -c "SOME SCREEN REPORTS MULTITOUCH" "$out.touchcaps.log" 2>/dev/null || echo 0)
+  python3 src/analyze.py "$out.ioreg.log" "$name" | tee "$out.verdict.log"
+  claimed=$(grep -c "VERDICT $name: claimed" "$out.verdict.log")
+  multitouch=0; [ -f "$out.touchcaps.log" ] && multitouch=$(grep -c "SOME SCREEN REPORTS MULTITOUCH" "$out.touchcaps.log")
   # Only touch-driven callbacks count. A mouse click fires the click recognizer too,
   # so counting every callback would turn a stray click into a false positive.
-  gestures=$(grep -c "SOURCE=directTouch" "$out.gesture.log" 2>/dev/null || echo 0)
-  local mouseish
-  mouseish=$(grep -c "SOURCE=mouse" "$out.gesture.log" 2>/dev/null || echo 0)
+  gestures=0; [ -f "$out.gesture.log" ] && gestures=$(grep -c "SOURCE=directTouch" "$out.gesture.log")
+  mouseish=0; [ -f "$out.gesture.log" ] && mouseish=$(grep -c "SOURCE=mouse" "$out.gesture.log")
 
   note "created:            $([ "$created" -gt 0 ] && echo YES || echo "NO — kernel refused")"
-  note "AppleMultitouch:    $([ "$claimed" -gt 0 ] && echo "YES ($claimed mentions)" || echo NO)"
-  note "screen multitouch:  $([ "$multitouch" -gt 0 ] && echo YES || echo no)"
+  note "screen multitouch:  $([ "$multitouch" -gt 0 ] && echo YES || echo no)  (baseline was $BASELINE_MT)"
   note "direct touches:     $gestures"
   note "mouse-driven:       $mouseish  (emulated, or you touched the mouse)"
 
-  printf '%-4s created=%-3s claimed=%-3s multitouch=%-3s gestures=%s\n' \
+  printf '%-4s created=%-3s claimed=%-3s multitouch=%-3s touches=%s\n' \
     "$name" \
     "$([ "$created" -gt 0 ] && echo yes || echo no)" \
     "$([ "$claimed" -gt 0 ] && echo yes || echo no)" \
     "$([ "$multitouch" -gt 0 ] && echo yes || echo no)" \
     "$gestures" >> results/SUMMARY.txt
 }
+
+BASELINE_MT="unknown"
+if [ -x bin/touchcaps ]; then
+  ./bin/touchcaps > results/baseline.touchcaps.log 2>&1
+  if grep -q "SOME SCREEN REPORTS MULTITOUCH" results/baseline.touchcaps.log; then
+    BASELINE_MT="yes — something already reports multitouch before we publish anything"
+  else
+    BASELINE_MT="no"
+  fi
+fi
 
 : > results/SUMMARY.txt
 echo "macOS $SW  $(date)" >> results/SUMMARY.txt
