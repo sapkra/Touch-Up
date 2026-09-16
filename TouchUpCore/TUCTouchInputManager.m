@@ -48,6 +48,10 @@
 /// reported relative to this rather than as an absolute position on the glass.
 @property CGPoint nativeGestureOrigin;
 
+/// How far apart they were when it opened, in millimetres. A pinch is the difference from
+/// this, which is the only part of the separation worth reproducing.
+@property CGFloat nativeGestureOriginSpreadMM;
+
 /// Set once the watchdog has seen macOS adopt the trackpad. Cached rather than asked for
 /// each time: answering it means a registry scan, and the question is asked per report.
 @property BOOL nativeGesturesConfirmedLive;
@@ -210,7 +214,23 @@ static const NSTimeInterval kFingerCountSettleTime = 0.08;
  adjustable in System Settings, and is not visible from here. So this is the number to turn
  if gestures feel wrong, and no amount of measuring the panel will remove the need to.
  */
-static const CGFloat kNativeGestureGain = 1.5;
+static const CGFloat kNativeGestureGain = 0.9;
+
+/**
+ How far apart the fingers are told to be on the pad, and how far from its centre any of
+ them may get.
+
+ The fingers' real separation cannot be passed through: two fingers a hand's width apart on
+ a large panel are further apart than the whole virtual trackpad, so both would sit pinned
+ to its edges with nowhere left to move, and the gesture would report nothing at all. Which
+ is why scrolling worked or did not depending on how widely the fingers happened to land.
+
+ So they are placed a fixed distance apart, and only the *change* in their separation is
+ reproduced — in real millimetres, so a pinch still zooms by what the fingers actually did.
+ The direction between them is kept as it is, which is what a rotation is made of.
+ */
+static const CGFloat kVirtualPadFingerSpacingMM = 45.0;
+static const CGFloat kVirtualPadMaxRadiusMM = 55.0;
 
 /// The surface we tell macOS the trackpad has, in millimetres — 0x3CF0 and 0x2B20 in
 /// hundredths, as answered during the interrogation. Movement has to be expressed as a
@@ -478,13 +498,27 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
  two fingers in one window would scroll whichever window the pointer was resting over.
  */
 - (void)submitNativeGestureWithTouches:(NSArray<TUCTouch *> *)touches {
-    NSArray<TUCTouch *> *contributing = touches;
+    // In a stable order. `activeTouches` is a set, so the order it hands back can differ
+    // from one report to the next, and contacts changing places mid-gesture is not
+    // something a device would ever do.
+    NSArray<TUCTouch *> *contributing =
+        [touches sortedArrayUsingComparator:^NSComparisonResult(TUCTouch *a, TUCTouch *b) {
+            if (a.contactID == b.contactID) return NSOrderedSame;
+            return a.contactID < b.contactID ? NSOrderedAscending : NSOrderedDescending;
+        }];
     if (contributing.count > 4) {
         contributing = [contributing subarrayWithRange:NSMakeRange(0, 4)];
     }
 
-    // Where the fingers are now, and where the pointer would have to be for the gesture to
-    // land in the right window.
+    // How big the glass actually is. Everything below is in millimetres because of it; a
+    // panel that will not say falls back to a guessed size, which is wrong but wrong
+    // consistently, and `-physicalSizeSource` says so in the diagnostics.
+    TUCScreen *screen = [self touchscreenForLocationID:contributing.firstObject.locationID];
+    CGSize panelMM = screen ? [screen effectivePhysicalSize] : CGSizeZero;
+    if (panelMM.width <= 0.0 || panelMM.height <= 0.0) {
+        panelMM = CGSizeMake(kVirtualPadWidthMM, kVirtualPadHeightMM);   // as if one to one
+    }
+
     CGPoint panelCentroid = CGPointZero;
     CGPoint screenCentroid = CGPointZero;
     for (TUCTouch *touch in contributing) {
@@ -501,40 +535,54 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     screenCentroid.x /= (CGFloat)contributing.count;
     screenCentroid.y /= (CGFloat)contributing.count;
 
+    // Offsets from the centre, in millimetres of glass.
+    CGPoint offsetsMM[4];
+    CGFloat furthest = 0.0;
+    for (NSUInteger i = 0; i < contributing.count; i++) {
+        TUCTouch *touch = contributing[i];
+        offsetsMM[i] = CGPointMake((touch.location.x - panelCentroid.x) * panelMM.width,
+                                   (touch.location.y - panelCentroid.y) * panelMM.height);
+        CGFloat radius = hypot(offsetsMM[i].x, offsetsMM[i].y);
+        if (radius > furthest) furthest = radius;
+    }
+
     if (!self.nativeGestureInFlight) {
         self.nativeGestureOrigin = panelCentroid;
+        self.nativeGestureOriginSpreadMM = furthest * 2.0;
         [[TUCCursorUtilities sharedInstance] moveCursorTo:screenCentroid];
         self.nativeGestureInFlight = YES;
         [self logGesture:@"  native gesture began"];
     }
 
-    // How big the glass actually is. Everything below is in millimetres because of it; a
-    // panel that will not say falls back to a guessed size, which is wrong but wrong
-    // consistently, and `-physicalSizeSource` says so in the diagnostics.
-    TUCScreen *screen = [self touchscreenForLocationID:contributing.firstObject.locationID];
-    CGSize panelMM = screen ? [screen effectivePhysicalSize] : CGSizeZero;
-    if (panelMM.width <= 0.0 || panelMM.height <= 0.0) {
-        panelMM = CGSizeMake(kVirtualPadWidthMM, kVirtualPadHeightMM);   // as if one to one
+    // Two fingers get the treatment that matters, because scrolling and pinching are what
+    // two fingers are for: placed a fixed distance apart along the line they really make,
+    // with the change in their separation carried over in real millimetres.
+    if (contributing.count == 2) {
+        CGFloat spread = furthest * 2.0;
+        CGFloat wanted = kVirtualPadFingerSpacingMM + (spread - self.nativeGestureOriginSpreadMM);
+        wanted = MAX(8.0, MIN(wanted, kVirtualPadMaxRadiusMM * 2.0));
+
+        CGFloat scale = (spread > 0.01) ? (wanted / spread) : 1.0;
+        offsetsMM[0] = CGPointMake(offsetsMM[0].x * scale, offsetsMM[0].y * scale);
+        offsetsMM[1] = CGPointMake(offsetsMM[1].x * scale, offsetsMM[1].y * scale);
+    } else if (furthest > kVirtualPadMaxRadiusMM) {
+        // Three or four fingers are a sweep, where the distance between them carries no
+        // meaning — so they are simply drawn in far enough to fit.
+        CGFloat scale = kVirtualPadMaxRadiusMM / furthest;
+        for (NSUInteger i = 0; i < contributing.count; i++) {
+            offsetsMM[i] = CGPointMake(offsetsMM[i].x * scale, offsetsMM[i].y * scale);
+        }
     }
 
-    // The fingers start in the middle of the pad and move from there. Reporting where they
-    // are on the glass instead would spend the pad's travel before the gesture began —
-    // fingers landing near an edge would have almost none left.
     CGFloat travelMMx = (panelCentroid.x - self.nativeGestureOrigin.x) * panelMM.width * kNativeGestureGain;
     CGFloat travelMMy = (panelCentroid.y - self.nativeGestureOrigin.y) * panelMM.height * kNativeGestureGain;
 
     TUCVirtualContact contacts[4];
     size_t count = 0;
-    for (TUCTouch *touch in contributing) {
-        // Each finger keeps its real separation from the centre, unscaled and in the same
-        // millimetres, because that separation is what a pinch is made of — amplifying it
-        // would zoom by half again as much as the fingers asked for.
-        CGFloat offsetMMx = (touch.location.x - panelCentroid.x) * panelMM.width;
-        CGFloat offsetMMy = (touch.location.y - panelCentroid.y) * panelMM.height;
-
-        contacts[count].x = 0.5 + (travelMMx + offsetMMx) / kVirtualPadWidthMM;
-        contacts[count].y = 0.5 + (travelMMy + offsetMMy) / kVirtualPadHeightMM;
-        contacts[count].identifier = (uint8_t)((labs((long)touch.contactID) % 15) + 1);
+    for (NSUInteger i = 0; i < contributing.count; i++) {
+        contacts[count].x = 0.5 + (travelMMx + offsetsMM[i].x) / kVirtualPadWidthMM;
+        contacts[count].y = 0.5 + (travelMMy + offsetsMM[i].y) / kVirtualPadHeightMM;
+        contacts[count].identifier = (uint8_t)((labs((long)contributing[i].contactID) % 15) + 1);
         count++;
     }
 
