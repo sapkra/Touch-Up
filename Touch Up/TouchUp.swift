@@ -29,6 +29,15 @@ class TouchUp: NSObject, ObservableObject {
     /// Take the touchscreen away from macOS, for panels it also tries to handle itself.
     @Published var isExclusiveAccessEnabled = false
 
+    /// Let macOS produce scrolling, pinching and swipes itself, from a trackpad we publish
+    /// and feed. One finger is unaffected and still points where it touches.
+    @Published var isNativeGesturesEnabled = false
+
+    /// Why native gestures are not running, when they were asked for and could not be had.
+    /// Shown under the switch: a setting that silently does nothing is worse than one that
+    /// says what happened.
+    @Published var nativeGesturesUnavailableReason: String?
+
     @Published var isOnScreenKeyboardEnabled = false
     @Published var isKeyboardAutoShowEnabled = false
 
@@ -191,6 +200,7 @@ extension TouchUp {
         defaults.register(defaults: [
             "isKioskModeEnabled" : false,
             "isExclusiveAccessEnabled" : false,
+            "isNativeGesturesEnabled" : false,
             "isGestureInspectorEnabled" : false,
 
             // Off by default. A machine with a keyboard attached does not want a second one taking
@@ -201,6 +211,7 @@ extension TouchUp {
 
         isKioskModeEnabled = defaults.bool(forKey: "isKioskModeEnabled")
         isExclusiveAccessEnabled = defaults.bool(forKey: "isExclusiveAccessEnabled")
+        isNativeGesturesEnabled = defaults.bool(forKey: "isNativeGesturesEnabled")
         isGestureInspectorEnabled = defaults.bool(forKey: "isGestureInspectorEnabled")
         isOnScreenKeyboardEnabled = defaults.bool(forKey: "isOnScreenKeyboardEnabled")
         isKeyboardAutoShowEnabled = defaults.bool(forKey: "isKeyboardAutoShowEnabled")
@@ -213,6 +224,11 @@ extension TouchUp {
             $isKioskModeEnabled.assign(to: \.kioskMode, on: touchManager),
             $isExclusiveAccessEnabled.sink { [weak self] enabled in
                 self?.touchManager.setTouchscreensSeized(enabled)
+            },
+
+            $isNativeGesturesEnabled.sink { [weak self] enabled in
+                if enabled { self?.nativeGesturesUnavailableReason = nil }
+                self?.touchManager.usesNativeGestures = enabled
             },
 
             // The watcher costs a read every 0.4 s while it runs, so it only runs when both the
@@ -236,6 +252,7 @@ extension TouchUp {
 
         defaults.set(isKioskModeEnabled, forKey: "isKioskModeEnabled")
         defaults.set(isExclusiveAccessEnabled, forKey: "isExclusiveAccessEnabled")
+        defaults.set(isNativeGesturesEnabled, forKey: "isNativeGesturesEnabled")
         defaults.set(isGestureInspectorEnabled, forKey: "isGestureInspectorEnabled")
         defaults.set(isOnScreenKeyboardEnabled, forKey: "isOnScreenKeyboardEnabled")
         defaults.set(isKeyboardAutoShowEnabled, forKey: "isKeyboardAutoShowEnabled")
@@ -416,6 +433,15 @@ extension TouchUp: TUCTouchDelegate {
 
     /// The user put a finger on a different panel. Anything showing on the glass should follow them
     /// there rather than stay on a screen they have walked away from.
+    /// Native gestures were asked for and could not be had. The core has already turned the
+    /// setting off by the time this arrives, so the switch is brought back into line and the
+    /// reason is put where the person who flipped it will see it.
+    @objc func nativeGesturesDidBecomeUnavailable(_ reason: String) {
+        isNativeGesturesEnabled = false
+        nativeGesturesUnavailableReason = reason
+    }
+
+
     @objc func lastTouchedDigitizerDidChange(_ locationID: UInt32) {
         keyboard.lastTouchedScreenDidChange()
     }
@@ -469,6 +495,10 @@ extension TouchUp {
         case \.isExclusiveAccessEnabled:
             return("Exclusive Access",
                    "Take sole control of the touchscreen so macOS stops handling it too. Enable this if your screen still behaves like a trackpad, or if every touch seems to register twice. (EXPERIMENTAL)")
+
+        case \.isNativeGesturesEnabled:
+            return("Let macOS Handle Gestures",
+                   "Scrolling, pinching and swipes are produced by macOS itself rather than imitated, so they carry the same momentum and behave the way they do in each app for a real trackpad. Pointing, tapping and dragging with one finger are unchanged. Needs permission from Apple that this build may not have — if it does not take, the switch turns itself off and says so. (EXPERIMENTAL)")
 
         case \.isGestureInspectorEnabled:
             return("Show What Touch Up Decides",

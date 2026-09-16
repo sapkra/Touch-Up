@@ -100,6 +100,17 @@ NS_ASSUME_NONNULL_BEGIN
  */
 - (void)lastTouchedDigitizerDidChange:(uint32_t)locationID;
 
+
+/**
+ Native gestures were asked for and could not be had, so everything is being synthesised.
+
+ Sent when the virtual trackpad cannot be published — most often a missing entitlement —
+ or when it is published and nothing adopts it, which is what a change to Apple's private
+ multitouch protocol would look like. Either way the setting has already turned itself off
+ by the time this arrives; the delegate's job is to say so, not to repair it.
+ */
+- (void)nativeGesturesDidBecomeUnavailable:(NSString *)reason;
+
 @end
 
 NS_ASSUME_NONNULL_END

@@ -141,6 +141,29 @@ NS_ASSUME_NONNULL_BEGIN
 
 
 /**
+ Hands gestures of two fingers or more to macOS, instead of synthesising them.
+
+ A virtual trackpad is published and the contacts are fed to it, so scrolling, momentum,
+ pinch, rotate and the multi-finger swipes are produced by the system rather than imitated
+ here — with the inertia and the per-application behaviour of real hardware.
+
+ One finger is untouched by this. It still positions the pointer absolutely, taps, drags
+ and holds, because a trackpad moves the pointer relatively and that is the one thing a
+ touchscreen must not do.
+
+ Turning it on can fail — the entitlement may be missing, or a future macOS may stop
+ accepting the device — in which case it turns itself back off, tells the delegate, and
+ everything carries on being synthesised as before. Check `nativeGesturesAreLive` for what
+ is actually happening rather than what was asked for.
+ */
+@property (nonatomic) BOOL usesNativeGestures;
+
+/// Whether the virtual trackpad exists *and* macOS has adopted it. False whenever gestures
+/// are being synthesised, whatever `usesNativeGestures` was set to.
+@property (readonly) BOOL nativeGesturesAreLive;
+
+
+/**
  The digitizer a finger last landed on, or 0 if none ever has.
 
  For putting touch-driven interface where the user's hands are, on a machine with more than one

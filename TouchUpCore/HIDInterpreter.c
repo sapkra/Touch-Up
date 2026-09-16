@@ -970,6 +970,18 @@ static CFIndex CountContactCollections(IOHIDDeviceRef dev) {
 static Boolean IsExcludedDevice(IOHIDDeviceRef dev) {
     enum { kAppleVendorID = 0x05AC };
 
+    // Our own virtual trackpad, refused by name.
+    //
+    // It is published as Apple hardware, so the vendor rule below would catch it anyway —
+    // but only by accident, and the accident is not one to rely on. Adopting our own twin
+    // would feed this driver its own output: a loop, and one that would quietly consume a
+    // slot in a table with four of them.
+    char serial[64];
+    CopyDeviceStringProperty(dev, CFSTR(kIOHIDSerialNumberKey), serial, sizeof(serial));
+    if (strncmp(serial, "TouchUp-Virtual-", 16) == 0) {
+        return true;
+    }
+
     CFTypeRef vendor = IOHIDDeviceGetProperty(dev, CFSTR(kIOHIDVendorIDKey));
     long vendorID = 0;
     if (vendor && CFGetTypeID(vendor) == CFNumberGetTypeID()

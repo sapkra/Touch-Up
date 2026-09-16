@@ -78,6 +78,21 @@ struct SettingsView: View {
                 SettingsExplanationLabel(labels: model.uiLabels(for: \.isExclusiveAccessEnabled))
             }
 
+            Toggle(isOn: $model.isNativeGesturesEnabled) {
+                SettingsExplanationLabel(labels: model.uiLabels(for: \.isNativeGesturesEnabled))
+            }
+
+            // Shown only when the switch turned itself back off. A setting that fails
+            // silently leaves someone flipping it and wondering, which is the whole reason
+            // the core reports a reason rather than just refusing.
+            if let reason = model.nativeGesturesUnavailableReason {
+                Label(reason, systemImage: "exclamationmark.triangle")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 20)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Toggle(isOn: $model.isGestureInspectorEnabled) {
                 SettingsExplanationLabel(labels: model.uiLabels(for: \.isGestureInspectorEnabled))
             }

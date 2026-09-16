@@ -10,6 +10,7 @@
 #import "HIDInterpreter.h"
 #import "TUCCursorUtilities.h"
 #import "TUCSurfaceProbe.h"
+#import "TUCVirtualTrackpad.h"
 
 #import <Carbon/Carbon.h> // key codes for the system navigation shortcuts
 
@@ -38,6 +39,14 @@
 @property BOOL cursorTouchDidActuatePress; // YES once this touch has put the mouse button down
 @property BOOL cursorTouchDidActuateLongPress; // YES once this touch has opened a context menu
 @property BOOL cursorTouchSawMultipleFingers; // YES if another finger was ever down alongside it
+
+/// Whether a gesture is currently being fed to the virtual trackpad, so that lifting the
+/// fingers closes it exactly once and a fresh set of fingers is not read as a continuation.
+@property BOOL nativeGestureInFlight;
+
+/// Set once the watchdog has seen macOS adopt the trackpad. Cached rather than asked for
+/// each time: answering it means a registry scan, and the question is asked per report.
+@property BOOL nativeGesturesConfirmedLive;
 @property NSTimeInterval cursorTouchBeganTime; // when the cursor touch landed, for concurrency tests
 
 /// What the cursor touch landed on, how well that is known, and where it was asked about.
@@ -274,6 +283,11 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
 }
 
 - (void)stop {
+    // Before the HID side goes, so the trackpad cannot outlive the thing feeding it.
+    [self endNativeGesture];
+    TUCVirtualTrackpadRetire();
+    self.nativeGesturesConfirmedLive = NO;
+
     CloseHIDManager();
 }
 
@@ -315,6 +329,127 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     } else {
         [self stopWatchingPointerPosition];
     }
+}
+
+
+#pragma mark - Native gestures
+
+@synthesize usesNativeGestures = _usesNativeGestures;
+
+- (void)setUsesNativeGestures:(BOOL)usesNativeGestures {
+    if (_usesNativeGestures == usesNativeGestures) {
+        return;
+    }
+    _usesNativeGestures = usesNativeGestures;
+
+    if (!usesNativeGestures) {
+        [self endNativeGesture];
+        TUCVirtualTrackpadRetire();
+        self.nativeGesturesConfirmedLive = NO;
+        [self logGesture:@"native gestures off — synthesising again"];
+        return;
+    }
+
+    if (!TUCVirtualTrackpadPublish()) {
+        _usesNativeGestures = NO;
+        [self reportNativeGesturesUnavailable:
+            @"the virtual trackpad could not be created, which usually means the app is not "
+             "entitled to publish one"];
+        return;
+    }
+
+    // Publishing is not the same as being driven: the device can exist and be adopted by
+    // nothing, in which case every gesture sent to it disappears without a word. So the
+    // answer is checked rather than assumed, and a device nobody wanted is given back.
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf || !strongSelf->_usesNativeGestures) {
+            return;
+        }
+        if (TUCVirtualTrackpadIsDriven()) {
+            strongSelf.nativeGesturesConfirmedLive = YES;
+            [strongSelf logGesture:@"native gestures live — macOS is driving the trackpad"];
+            return;
+        }
+        strongSelf->_usesNativeGestures = NO;
+        TUCVirtualTrackpadRetire();
+        [strongSelf reportNativeGesturesUnavailable:
+            @"macOS did not take up the virtual trackpad, so gestures are being synthesised "
+             "as before"];
+    });
+}
+
+
+- (BOOL)nativeGesturesAreLive {
+    return _usesNativeGestures && self.nativeGesturesConfirmedLive;
+}
+
+
+- (void)reportNativeGesturesUnavailable:(NSString *)reason {
+    self.nativeGesturesConfirmedLive = NO;
+    [self logGesture:[NSString stringWithFormat:@"native gestures unavailable: %@", reason]];
+
+    if ([self.delegate respondsToSelector:@selector(nativeGesturesDidBecomeUnavailable:)]) {
+        [self.delegate nativeGesturesDidBecomeUnavailable:reason];
+    }
+}
+
+
+/**
+ Hands one frame of contacts to the trackpad.
+
+ The pointer is moved under the fingers before the first frame of a gesture, and only then.
+ macOS applies a trackpad gesture wherever the pointer happens to be — which, coming out of
+ the single-finger path, is wherever that finger last left it. Without this, scrolling with
+ two fingers in one window would scroll whichever window the pointer was resting over.
+ */
+- (void)submitNativeGestureWithTouches:(NSArray<TUCTouch *> *)touches {
+    TUCVirtualContact contacts[4];
+    size_t count = 0;
+    CGPoint centroid = CGPointZero;
+
+    for (TUCTouch *touch in touches) {
+        if (count >= 4) {
+            break;
+        }
+        contacts[count].x = touch.location.x;
+        contacts[count].y = touch.location.y;
+        contacts[count].identifier = (uint8_t)((labs((long)touch.contactID) % 15) + 1);
+
+        CGPoint absolute = [self convertScreenPointRelativeToAbsolute:touch.location
+                                                           locationID:touch.locationID];
+        centroid.x += absolute.x;
+        centroid.y += absolute.y;
+        count++;
+    }
+
+    if (count == 0) {
+        return;
+    }
+
+    if (!self.nativeGestureInFlight) {
+        centroid.x /= (CGFloat)count;
+        centroid.y /= (CGFloat)count;
+        [[TUCCursorUtilities sharedInstance] moveCursorTo:centroid];
+        self.nativeGestureInFlight = YES;
+        [self logGesture:@"  native gesture began"];
+    }
+
+    TUCVirtualTrackpadSubmit(contacts, count);
+}
+
+
+/// Closes a gesture the fingers have left. What happens next — the flick carrying on,
+/// slowing, stopping — is the system's, and nothing here should try to help.
+- (void)endNativeGesture {
+    if (!self.nativeGestureInFlight) {
+        return;
+    }
+    TUCVirtualTrackpadLiftoff();
+    self.nativeGestureInFlight = NO;
+    [self logGesture:@"  native gesture ended"];
 }
 
 
@@ -1055,6 +1190,10 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
 - (void)processTouchesForCursorInput {
     
     if(!self.cursorTouch || !self.postMouseEvents) {
+        // Every finger has gone, so any gesture the trackpad was carrying is over. This is
+        // the only path taken when the last one lifts, which is why the close lives here
+        // rather than beside the other multi-finger handling below.
+        [self endNativeGesture];
         return;
     }
 
@@ -1092,6 +1231,20 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
         self.timeOfTouchCountChange = nowTime;
     }
     BOOL fingerCountHasSettled = (nowTime - self.timeOfTouchCountChange) >= kFingerCountSettleTime;
+
+    // Two fingers or more belong to macOS when the trackpad is live. It scrolls, pinches,
+    // rotates and swipes with its own inertia and whatever each application does with real
+    // hardware, none of which is worth imitating when it can simply be had.
+    //
+    // One finger is never handed over. A trackpad moves the pointer relatively, and the
+    // whole point of a touchscreen is that the pointer is already under the finger.
+    if (self.nativeGesturesAreLive) {
+        if (touches.count >= 2) {
+            [self submitNativeGestureWithTouches:touches];
+            return;
+        }
+        [self endNativeGesture];
+    }
 
     // Three or more fingers are a gesture of the whole hand, so they are read here — ahead of
     // everything that branches on the cursor touch's phase. Below the stationary branch, as this
@@ -2411,6 +2564,19 @@ static const CGFloat kResizeBorderWidth = 8.0;
     [lines addObject:[NSString stringWithFormat:@"Device:   %@%@",
                       TUCNameForDigitizerKind([self digitizerKindForLocationID:locationID]),
                       TouchDeviceDrivesPointer(locationID) ? @"" : @"  (not driving the pointer)"]];
+
+    // Which half of the hybrid is actually in force. Worth stating outright: "asked for"
+    // and "happening" come apart here whenever the entitlement is missing or macOS has
+    // stopped accepting the device, and a bug report about gestures is unreadable without
+    // knowing which of the two produced them.
+    if (self.usesNativeGestures || TUCVirtualTrackpadIsPublished()) {
+        [lines addObject:[NSString stringWithFormat:@"Gestures: %@",
+                          self.nativeGesturesAreLive
+                              ? @"native — macOS is driving a virtual trackpad"
+                              : @"synthesised (native was asked for and is not running)"]];
+    } else {
+        [lines addObject:@"Gestures: synthesised"];
+    }
 
     [lines addObject:[NSString stringWithFormat:@"Slop:     %.1f mm of %.1f mm",
                       [self effectiveTapTolerance], self.tapTolerance]];
