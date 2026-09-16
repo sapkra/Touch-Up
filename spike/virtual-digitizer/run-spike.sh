@@ -30,6 +30,8 @@ command -v swiftc >/dev/null || { echo "swiftc not found — install Xcode Comma
 say "Build"
 clang -O2 -o bin/vhid src/vhid.c -framework CoreFoundation -framework IOKit -framework CoreGraphics || exit 1
 note "bin/vhid"
+clang -O2 -o bin/mt2 src/mt2.c -framework CoreFoundation -framework IOKit -framework CoreGraphics || exit 1
+note "bin/mt2"
 swiftc -O -o bin/touchcaps src/touchcaps.swift 2>/dev/null \
   && note "bin/touchcaps" || note "touchcaps failed to build (needs the macOS 27 SDK) — oracle 1 unavailable"
 swiftc -O -o bin/gesturetest src/gesturetest.swift 2>/dev/null \
@@ -40,8 +42,9 @@ swiftc -O -o bin/gesturetest src/gesturetest.swift 2>/dev/null \
 # that does not need it must not carry it.
 cp bin/vhid bin/vhid-probe
 codesign --force --sign - --entitlements vhid.entitlements bin/vhid || exit 1
+codesign --force --sign - --entitlements vhid.entitlements bin/mt2 || exit 1
 codesign --force --sign - bin/vhid-probe || exit 1
-note "signed bin/vhid (entitled) and bin/vhid-probe (plain)"
+note "signed bin/vhid and bin/mt2 (entitled), bin/vhid-probe (plain)"
 
 say "Clearing any leftovers from an earlier run"
 pkill -x vhid 2>/dev/null && sleep 2
@@ -179,6 +182,39 @@ run_variant B7 descriptors/sidecar-touchscreen.bin 0x0D   4 "Apple"    "--geomet
 # be the path that matters. B2 was this test with the wrong descriptor and the wrong
 # reports.
 run_variant B8 descriptors/standard-touchscreen.bin 0x0D  4 "Touch Up" "--layout standard"
+
+# C1. The Magic Trackpad 2 emulation. Everything so far has been adopted and silent;
+# VoodooInput is driven successfully by this same stock driver, and the difference is
+# that it answers the driver's GET_REPORT interrogation for sensor geometry. Whatever
+# happens, the log of what the driver asks for is the finding.
+say "Variant C1 — Magic Trackpad 2 emulation"
+if [ -x bin/gesturetest ]; then ./bin/gesturetest 30 > results/C1.gesture.log 2>&1 & sleep 2; fi
+./bin/mt2 --hold 15 > results/C1.publish.log 2>&1 &
+C1PID=$!
+sleep 8
+{
+  echo "=== ioreg -c IOHIDUserDevice ==="; ioreg -c IOHIDUserDevice -r -l -w0
+  echo; echo "=== ioreg -c AppleMultitouchDevice ==="; ioreg -c AppleMultitouchDevice -r -l -w0
+  echo; echo "=== hidutil list ==="; hidutil list 2>/dev/null
+} > results/C1.ioreg.log 2>&1
+[ -x bin/touchcaps ] && ./bin/touchcaps > results/C1.touchcaps.log 2>&1
+wait $C1PID 2>/dev/null
+pkill -f "bin/gesturetest" 2>/dev/null
+python3 src/analyze.py results/C1.ioreg.log C1 | tee results/C1.verdict.log
+C1_GET=$(grep -c "  GET " results/C1.publish.log)
+C1_SET=$(grep -c "  SET " results/C1.publish.log)
+C1_PTR=$(grep -c "POINTER MOVED" results/C1.publish.log)
+C1_TOUCH=0; [ -f results/C1.gesture.log ] && C1_TOUCH=$(grep -c "SOURCE=directTouch" results/C1.gesture.log)
+note "driver asked us:    $C1_GET get, $C1_SET set requests"
+note "pointer moved:      $([ "$C1_PTR" -gt 0 ] && echo YES || echo no)"
+note "direct touches:     $C1_TOUCH"
+printf 'C1   interrogation=%s/%s pointer=%-3s touches=%s  (Magic Trackpad 2 emulation)\n' \
+  "$C1_GET" "$C1_SET" \
+  "$([ "$C1_PTR" -gt 0 ] && echo yes || echo no)" "$C1_TOUCH" >> results/SUMMARY.txt
+
+# C2. The other reading of the disassembly: usage 7 on Apple's multitouch vendor page as
+# the inbound counterpart of usage 6, carrying 96-byte MTContact records directly.
+run_variant C2 descriptors/mt-vendor-ff60.bin      0xFF60 7 "Touch Up" "--mt-props --geometry --layout contacts"
 
 say "Summary"
 cat results/SUMMARY.txt

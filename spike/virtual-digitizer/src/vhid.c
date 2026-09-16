@@ -238,6 +238,86 @@ static void PackStandardReport(uint8_t *out, const Contact *contacts, size_t cou
     out[13] = (uint8_t)count;
 }
 
+/**
+ An MTContact record — what Apple's parser hands *out* on this same vendor page.
+
+ The plugin's createVendorDefinedTouchFrameEvent builds an IOHIDEvent on usage page
+ 0xFF60, usage 6, whose payload is count × 0x60 bytes (verified by disassembly). Our
+ MTUserDevice personality sits on usage 7 of that page, so the guess worth testing is
+ that usage 7 is the inbound direction of the same thing: an array of these.
+
+ Layout from the published MultitouchSupport headers (asmagill, libpointing, calftrail),
+ which agree with each other and with the 96-byte stride in Apple's binary.
+ */
+typedef struct {
+    int32_t frame;          //  +0
+    int32_t _pad0;          //  +4  (timestamp is 8-aligned)
+    double  timestamp;      //  +8
+    int32_t pathIndex;      // +16
+    int32_t stage;          // +20
+    int32_t fingerID;       // +24
+    int32_t handID;         // +28
+    float   normalizedPosX, normalizedPosY, normalizedVelX, normalizedVelY;  // +32
+    float   zTotal;         // +48
+    float   zPressure;      // +52
+    float   angle;          // +56
+    float   majorAxis;      // +60
+    float   minorAxis;      // +64
+    float   absolutePosX, absolutePosY, absoluteVelX, absoluteVelY;          // +68
+    int32_t field14;        // +84
+    int32_t field15;        // +88
+    float   zDensity;       // +92
+} MTContactRecord;                                                           // 96 bytes
+
+_Static_assert(sizeof(MTContactRecord) == 96, "MTContact must be 96 bytes");
+
+#define kMTPathStageMakeTouch 3
+#define kMTPathStageTouching  4
+#define kMTPathStageBreakTouch 5
+
+static void FeedContactSweep(IOHIDUserDeviceRef dev) {
+    CGPoint pointerBefore = PointerLocation();
+    const int frames = 60;
+    printf("feeding %d frames of MTContact records (96 bytes each)...\n", frames);
+    fflush(stdout);
+
+    for (int i = 0; i < frames; i++) {
+        double t = (double)i / (double)(frames - 1);
+        MTContactRecord contact;
+        memset(&contact, 0, sizeof(contact));
+        contact.frame = i + 1;
+        contact.timestamp = (double)i * 0.008;
+        contact.pathIndex = 1;
+        contact.stage = (i == 0) ? kMTPathStageMakeTouch : kMTPathStageTouching;
+        contact.fingerID = 1;
+        contact.handID = 1;
+        contact.normalizedPosX = (float)(0.2 + t * 0.6);
+        contact.normalizedPosY = (float)(0.2 + t * 0.5);
+        contact.zTotal = 1.0f;
+        contact.zPressure = 0.5f;
+        contact.angle = 1.5708f;
+        contact.majorAxis = 8.0f;
+        contact.minorAxis = 8.0f;
+        contact.absolutePosX = (float)(contact.normalizedPosX * 100.0);
+        contact.absolutePosY = (float)(contact.normalizedPosY * 70.0);
+        contact.zDensity = 1.0f;
+
+        IOReturn r = IOHIDUserDeviceHandleReportWithTimeStamp(dev, mach_absolute_time(),
+                                                             (const uint8_t *)&contact,
+                                                             (CFIndex)sizeof(contact));
+        if (r != kIOReturnSuccess && i == 0) printf("  HandleReport returned 0x%08x\n", r);
+        usleep(8000);
+    }
+
+    CGPoint pointerAfter = PointerLocation();
+    printf("sweep done; pointer %.0f,%.0f -> %.0f,%.0f  POINTER %s\n",
+           pointerBefore.x, pointerBefore.y, pointerAfter.x, pointerAfter.y,
+           (pointerBefore.x != pointerAfter.x || pointerBefore.y != pointerAfter.y)
+               ? "MOVED — the system is acting on our reports"
+               : "did not move");
+    fflush(stdout);
+}
+
 static void FeedStandardSweep(IOHIDUserDeviceRef dev) {
     CGPoint pointerBefore = PointerLocation();
     uint8_t report[kStandardReportLength];
@@ -333,7 +413,8 @@ int main(int argc, char **argv) {
     if (!descPath) {
         fprintf(stderr,
             "usage: %s --desc <file> [--usage-page N] [--usage N] [--manufacturer S]\n"
-            "          [--mt-props] [--geometry] [--family N] [--layout standard|sidecar]\n"
+            "          [--mt-props] [--geometry] [--family N]\n"
+            "          [--layout standard|sidecar|contacts]\n"
             "          [--feed] [--hold seconds]\n"
             "       %s --dump-real <out.bin>\n", argv[0], argv[0]);
         return 2;
@@ -391,7 +472,9 @@ int main(int argc, char **argv) {
     CFRunLoopRunInMode(kCFRunLoopDefaultMode, 3.0, false);
 
     if (feed) {
-        if (!strcmp(layout, "standard")) {
+        if (!strcmp(layout, "contacts")) {
+            FeedContactSweep(dev);
+        } else if (!strcmp(layout, "standard")) {
             FeedStandardSweep(dev);
         } else if (!strcmp(layout, "sidecar") || (usagePage == 0x0D && descLen == 256)) {
             FeedSidecarSweep(dev);

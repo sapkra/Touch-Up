@@ -1,6 +1,6 @@
 # Virtual digitizer spike (E2)
 
-## What to do next (round 4)
+## What to do next (round 6)
 
 Everything is prepared. On the test Mac — the one already booted with
 `amfi_get_out_of_my_way=1`, nothing to set up again:
@@ -13,7 +13,27 @@ cd <this directory>       # after pulling the branch, or copying it across again
 Then send back `results/`. That is the whole task; roughly two minutes, hands off the
 machine while it runs. No touchscreen, no iPad, no gestures.
 
-**B8 is the one that matters now.** Everything before it chased adoption by the
+**C1 is the one that matters now.** The research turned up
+[VoodooInput](https://github.com/acidanthera/VoodooInput), a Hackintosh kext whose whole
+purpose is publishing a fake HID device that macOS's *own* multitouch driver adopts and
+drives as a Magic Trackpad 2 — proof by existence that Apple's parser accepts synthesized
+reports. Comparing it against what we do showed the missing piece: **before emitting
+anything, the driver interrogates the device with GET_REPORT requests for its sensor
+geometry** (selectors `0xD1`, `0xD3`, `0xD0`, `0xA1`, `0xD9`, `0x7F`, `0xC8`, `0xDB`). A
+device that answers nothing has told it nothing, so it stays silent — exactly our symptom
+through five rounds. C1 answers that interrogation and then sends Magic Trackpad 2 reports,
+whose format Linux's `hid-magicmouse` and VoodooInput document identically.
+
+**C1 logs every request the driver makes, whatever the outcome.** Even total failure leaves
+a map of what Apple's driver asks a multitouch device for, which nothing else has given us.
+
+**C2** tests the other reading: Apple's plugin emits touch frames on vendor page `0xFF60`
+usage **6** as arrays of 96-byte `MTContact` records (verified by disassembling the binary
+on this machine), and our `MTUserDevice` personality sits on usage **7** of that same page.
+So C2 feeds `MTContact` records directly, on the theory that usage 7 is the inbound
+counterpart.
+
+The earlier note about B8: Everything before it chased adoption by the
 multitouch driver. Round 3 showed that is probably the wrong door: `NSScreen` reports the
 display as touch-capable for *any* device with TouchScreen usage `0x0D/0x04`, including
 one the multitouch driver never adopted and the generic `AppleUserHIDEventDriver` handled
