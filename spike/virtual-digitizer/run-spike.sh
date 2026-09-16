@@ -161,6 +161,13 @@ else
   echo "B4   skipped (no real panel attached)" >> results/SUMMARY.txt
 fi
 
+# Round 2. B3 and B1 were both adopted by the multitouch driver and then emitted nothing,
+# and the device they produced had no surface geometry at all. These repeat exactly those
+# two shapes with geometry added, which is the cheapest remaining explanation to test.
+run_variant B5 descriptors/mt-vendor-ff60.bin      0xFF60 7 "Touch Up" "--mt-props --geometry"
+run_variant B6 descriptors/mt-vendor-ff60.bin      0xFF60 7 "Touch Up" "--mt-props --geometry --family 106"
+run_variant B7 descriptors/sidecar-touchscreen.bin 0x0D   4 "Apple"    "--geometry"
+
 say "Summary"
 cat results/SUMMARY.txt
 echo

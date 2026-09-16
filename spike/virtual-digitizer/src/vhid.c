@@ -30,6 +30,53 @@ static void SetNum(CFMutableDictionaryRef d, const char *k, int v) {
     CFRelease(n); CFRelease(key);
 }
 
+static void SetData(CFMutableDictionaryRef d, const char *k, const uint8_t *bytes, size_t len) {
+    CFStringRef key = CFStringCreateWithCString(NULL, k, kCFStringEncodingUTF8);
+    CFDataRef val = CFDataCreate(NULL, bytes, (CFIndex)len);
+    CFDictionarySetValue(d, key, val);
+    CFRelease(key); CFRelease(val);
+}
+
+static void SetBool(CFMutableDictionaryRef d, const char *k, bool v) {
+    CFStringRef key = CFStringCreateWithCString(NULL, k, kCFStringEncodingUTF8);
+    CFDictionarySetValue(d, key, v ? kCFBooleanTrue : kCFBooleanFalse);
+    CFRelease(key);
+}
+
+/**
+ The surface geometry an AppleMultitouchDevice carries when it works.
+
+ Our claimed device has none of this, which is the leading explanation for why it is
+ adopted and then emits nothing: there is no surface to map a contact onto. The values
+ and the opaque blobs are copied from the built-in trackpad of the machine the spike
+ runs on — a guess in their particulars, but the right *shape*, which is what is being
+ tested. Family ID is separate (--family): claiming one commits to that family's frame
+ format, which is a bigger promise than the rest of these.
+ */
+static void AddSensorGeometry(CFMutableDictionaryRef props) {
+    static const uint8_t surfaceDescriptor[] = {
+        0x79, 0x2e, 0x00, 0x00, 0x6c, 0x1f, 0x00, 0x00,
+        0x3a, 0xeb, 0x63, 0xff, 0x9b, 0x16, 0xbe, 0x1b,
+    };
+    static const uint8_t regionDescriptor[] = {
+        0x02, 0x01, 0x00, 0x10, 0x01, 0x00, 0x18, 0x00,
+        0x02, 0x10, 0x02, 0x01, 0x0b, 0x02, 0x00,
+    };
+    static const uint8_t regionParam[] = { 0x00, 0x00, 0x03, 0x00, 0x00, 0x02 };
+
+    SetNum(props, "Sensor Surface Width", 11897);
+    SetNum(props, "Sensor Surface Height", 8044);
+    SetNum(props, "Sensor Rows", 18);
+    SetNum(props, "Sensor Columns", 24);
+    SetData(props, "Sensor Surface Descriptor", surfaceDescriptor, sizeof(surfaceDescriptor));
+    SetData(props, "Sensor Region Descriptor", regionDescriptor, sizeof(regionDescriptor));
+    SetData(props, "Sensor Region Param", regionParam, sizeof(regionParam));
+    SetNum(props, "VersionNumber", 2357);
+    SetNum(props, "bcdVersion", 1328);
+    SetBool(props, "MTHIDDevice", true);
+    SetBool(props, "HSTouchHIDService", true);
+}
+
 static void SetStr(CFMutableDictionaryRef d, const char *k, const char *v) {
     CFStringRef key = CFStringCreateWithCString(NULL, k, kCFStringEncodingUTF8);
     CFStringRef val = CFStringCreateWithCString(NULL, v, kCFStringEncodingUTF8);
@@ -169,8 +216,8 @@ int main(int argc, char **argv) {
     }
 
     const char *descPath = NULL, *manufacturer = "Touch Up";
-    int usagePage = 0x0D, usage = 0x04, hold = 25;
-    bool mtProps = false, feed = false;
+    int usagePage = 0x0D, usage = 0x04, hold = 25, family = 0;
+    bool mtProps = false, feed = false, geometry = false;
 
     for (int i = 1; i < argc; i++) {
         if      (!strcmp(argv[i], "--desc")         && i + 1 < argc) descPath     = argv[++i];
@@ -178,13 +225,15 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--usage")        && i + 1 < argc) usage        = (int)strtol(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--manufacturer") && i + 1 < argc) manufacturer = argv[++i];
         else if (!strcmp(argv[i], "--hold")         && i + 1 < argc) hold         = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--family")        && i + 1 < argc) family       = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--mt-props"))                      mtProps      = true;
+        else if (!strcmp(argv[i], "--geometry"))                      geometry     = true;
         else if (!strcmp(argv[i], "--feed"))                          feed         = true;
     }
     if (!descPath) {
         fprintf(stderr,
             "usage: %s --desc <file> [--usage-page N] [--usage N] [--manufacturer S]\n"
-            "          [--mt-props] [--feed] [--hold seconds]\n"
+            "          [--mt-props] [--geometry] [--family N] [--feed] [--hold seconds]\n"
             "       %s --dump-real <out.bin>\n", argv[0], argv[0]);
         return 2;
     }
@@ -217,8 +266,12 @@ int main(int argc, char **argv) {
         CFDictionarySetValue(props, CFSTR("HIDServiceSupport"), kCFBooleanTrue);
     }
 
-    printf("publishing: descriptor %zu bytes, usage %#x/%#x, manufacturer \"%s\"%s\n",
-           descLen, usagePage, usage, manufacturer, mtProps ? ", +mt-props" : "");
+    if (geometry) AddSensorGeometry(props);
+    if (family)   SetNum(props, "Family ID", family);
+
+    printf("publishing: descriptor %zu bytes, usage %#x/%#x, manufacturer \"%s\"%s%s%s\n",
+           descLen, usagePage, usage, manufacturer,
+           mtProps ? ", +mt-props" : "", geometry ? ", +geometry" : "", family ? ", +family" : "");
     fflush(stdout);
 
     IOHIDUserDeviceRef dev = IOHIDUserDeviceCreateWithProperties(kCFAllocatorDefault, props, 0);

@@ -1,5 +1,43 @@
 # Virtual digitizer spike (E2)
 
+## What to do next (round 2)
+
+Everything is prepared. On the test Mac — the one already booted with
+`amfi_get_out_of_my_way=1`, nothing to set up again:
+
+```
+cd <this directory>       # after pulling the branch, or copying it across again
+./run-spike.sh
+```
+
+Then send back `results/`. That is the whole task; roughly two minutes, hands off the
+machine while it runs. No touchscreen, no iPad, no gestures.
+
+It now runs seven variants instead of four. B1–B4 are a repeat of round 1. The new ones,
+B5–B7, are the point: round 1 showed that a device *is* adopted by the multitouch driver
+but then emits nothing, and that the multitouch device it creates has none of the
+properties describing a physical surface. B5–B7 repeat the two shapes that were adopted,
+with that geometry filled in, to find out whether it was the missing piece.
+
+The geometry values are copied from your own machine's trackpad, read out of the round-1
+dumps — surface 11897 × 8044, 18 rows × 24 columns, plus the opaque descriptor blobs.
+They live in `AddSensorGeometry()` in `src/vhid.c`; nothing to edit.
+
+What the outcomes mean:
+
+- **direct touches > 0 on any variant** — the idea works and the native path is open.
+  That is the moment to request the entitlement from Apple.
+- **claimed, still nothing** — geometry was not the missing piece, and what remains is
+  Apple's multitouch frame format, which is undocumented. Worth stopping to weigh against
+  filing a Feedback Assistant report instead; see FINDINGS.md.
+- **B6 behaves differently from B5** — `Family ID` matters, which tells us the parser is
+  choosing a per-family report format and names the next thing to chase.
+
+Read FINDINGS.md for what round 1 established, including why Sidecar cannot be copied.
+
+---
+
+
 Answers one question: **does macOS 27 claim a virtual HID digitizer published by a
 third-party process, and does native touch come out the other end?**
 
