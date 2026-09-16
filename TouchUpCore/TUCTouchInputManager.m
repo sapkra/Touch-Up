@@ -44,6 +44,10 @@
 /// fingers closes it exactly once and a fresh set of fingers is not read as a continuation.
 @property BOOL nativeGestureInFlight;
 
+/// Where the fingers were when the gesture opened, in the panel's own space. Movement is
+/// reported relative to this rather than as an absolute position on the glass.
+@property CGPoint nativeGestureOrigin;
+
 /// Set once the watchdog has seen macOS adopt the trackpad. Cached rather than asked for
 /// each time: answering it means a registry scan, and the question is asked per report.
 @property BOOL nativeGesturesConfirmedLive;
@@ -180,6 +184,26 @@ static const NSTimeInterval kForeignPointerGracePeriod = 0.2;
  or a two-finger drag begins and makes the difference between three fingers working and not.
  */
 static const NSTimeInterval kFingerCountSettleTime = 0.08;
+
+
+/**
+ How far the virtual trackpad is told the fingers moved, against how far they really did.
+
+ A trackpad is small and a touchscreen is not. Mapping the glass onto the pad one for one
+ means a finger crossing a fifth of a 32-inch panel — a long, deliberate drag — arrives as
+ three centimetres of trackpad, which macOS scrolls accordingly and which feels like
+ wading. On a touchscreen the content is expected to keep up with the finger.
+
+ So translation is amplified. Not without limit: the pad has edges, and a gesture that runs
+ off one stops moving, exactly as a finger running off a real trackpad does. At this gain a
+ gesture has about six centimetres of panel to travel in before it reaches the edge, which
+ is a generous flick, and long distances are covered the way they are on any trackpad —
+ by flicking again, or by letting the momentum carry.
+
+ Only the *travel* is scaled. The distance between the fingers is passed through untouched,
+ so a pinch zooms by what the fingers actually did rather than by two and a half times it.
+ */
+static const CGFloat kNativeGestureGain = 2.5;
 
 /**
  How long since its last report a contact is abandoned and no longer treated as a finger on the
@@ -441,35 +465,52 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
  two fingers in one window would scroll whichever window the pointer was resting over.
  */
 - (void)submitNativeGestureWithTouches:(NSArray<TUCTouch *> *)touches {
-    TUCVirtualContact contacts[4];
-    size_t count = 0;
-    CGPoint centroid = CGPointZero;
+    NSArray<TUCTouch *> *contributing = touches;
+    if (contributing.count > 4) {
+        contributing = [contributing subarrayWithRange:NSMakeRange(0, 4)];
+    }
 
-    for (TUCTouch *touch in touches) {
-        if (count >= 4) {
-            break;
-        }
-        contacts[count].x = touch.location.x;
-        contacts[count].y = touch.location.y;
-        contacts[count].identifier = (uint8_t)((labs((long)touch.contactID) % 15) + 1);
+    // Where the fingers are now, and where the pointer would have to be for the gesture to
+    // land in the right window.
+    CGPoint panelCentroid = CGPointZero;
+    CGPoint screenCentroid = CGPointZero;
+    for (TUCTouch *touch in contributing) {
+        panelCentroid.x += touch.location.x;
+        panelCentroid.y += touch.location.y;
 
         CGPoint absolute = [self convertScreenPointRelativeToAbsolute:touch.location
                                                            locationID:touch.locationID];
-        centroid.x += absolute.x;
-        centroid.y += absolute.y;
-        count++;
+        screenCentroid.x += absolute.x;
+        screenCentroid.y += absolute.y;
     }
-
-    if (count == 0) {
-        return;
-    }
+    panelCentroid.x /= (CGFloat)contributing.count;
+    panelCentroid.y /= (CGFloat)contributing.count;
+    screenCentroid.x /= (CGFloat)contributing.count;
+    screenCentroid.y /= (CGFloat)contributing.count;
 
     if (!self.nativeGestureInFlight) {
-        centroid.x /= (CGFloat)count;
-        centroid.y /= (CGFloat)count;
-        [[TUCCursorUtilities sharedInstance] moveCursorTo:centroid];
+        self.nativeGestureOrigin = panelCentroid;
+        [[TUCCursorUtilities sharedInstance] moveCursorTo:screenCentroid];
         self.nativeGestureInFlight = YES;
         [self logGesture:@"  native gesture began"];
+    }
+
+    // The fingers start in the middle of the pad and move from there, amplified. Reporting
+    // where they are on the glass instead would spend the pad's travel before the gesture
+    // began — fingers landing near an edge would have almost none left — and would scale
+    // every movement down to the ratio between a large panel and a small trackpad.
+    CGPoint travel = CGPointMake((panelCentroid.x - self.nativeGestureOrigin.x) * kNativeGestureGain,
+                                 (panelCentroid.y - self.nativeGestureOrigin.y) * kNativeGestureGain);
+
+    TUCVirtualContact contacts[4];
+    size_t count = 0;
+    for (TUCTouch *touch in contributing) {
+        // Each finger keeps its real offset from the centre, so their separation — which is
+        // what a pinch is made of — arrives unaltered.
+        contacts[count].x = 0.5 + travel.x + (touch.location.x - panelCentroid.x);
+        contacts[count].y = 0.5 + travel.y + (touch.location.y - panelCentroid.y);
+        contacts[count].identifier = (uint8_t)((labs((long)touch.contactID) % 15) + 1);
+        count++;
     }
 
     TUCVirtualTrackpadSubmit(contacts, count);
@@ -1275,7 +1316,18 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
     // whole point of a touchscreen is that the pointer is already under the finger.
     if (self.nativeGesturesAreLive) {
         if (touches.count >= 2) {
-            [self submitNativeGestureWithTouches:touches];
+            // Wait for the count to stop changing before handing anything over, for the
+            // reason the swipe below waits: fingers do not land together, and a panel that
+            // reports a stray second contact would otherwise divert a single finger into a
+            // gesture for as long as the stray lasted. Once a gesture is running it carries
+            // on regardless — a third finger joining must not restart it.
+            if (fingerCountHasSettled || self.nativeGestureInFlight) {
+                [self submitNativeGestureWithTouches:touches];
+            }
+
+            // Returning either way. While the trackpad is live, more than one finger is
+            // never synthesised here: two fingers commit to a drag after two millimetres,
+            // and that would take the button down underneath a gesture macOS is handling.
             return;
         }
         [self endNativeGesture];
