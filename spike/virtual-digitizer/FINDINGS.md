@@ -128,3 +128,55 @@ virtual device and log what the multitouch driver asks for. If it requests featu
 during setup, their IDs and lengths are a map of what it wants. If it asks for nothing,
 the protocol is input-report-driven and the only way forward is guessing, which is where
 this should stop.
+
+## Round 5 — a trustworthy negative
+
+Rounds 1–4 measured touch delivery through a 900×700 window while the synthetic sweep
+crossed most of a 2560-wide display, so every "no touches" reading was taken through an
+instrument that could not tell silence from a miss. Round 5 fixed that: the window covers
+the screen and floats, and the publisher records the pointer position around each sweep —
+an oracle that needs no window, no focus and no permission.
+
+**Pointer movement: none, on every variant.** Every report was accepted by the kernel (no
+error returns from `IOHIDUserDeviceHandleReportWithTimeStamp`) and acted on by nothing.
+
+The decisive variant is B8: an ordinary Windows-style touchscreen, standard contacts,
+standard reports, adopted by the generic `AppleUserHIDEventDriver`, with the display duly
+reporting `multiTouch=true`. It produced nothing at all — **which is exactly what macOS
+does with a real USB touchscreen, and is the reason this project exists.** B8 faithfully
+reproduced the status quo.
+
+## Conclusion: the native touch path is not reachable from a HID device
+
+The answer to "can Touch Up use the macOS 27 touch APIs" is no, and the evidence is now
+specific about why:
+
+- `NSScreen.touchCapabilities` flips to true for any `0x0D/0x04` device, so AppKit's
+  *capability advertisement* is driven by HID usage. That is all it is — an advertisement.
+  No events follow.
+- Direct touch reaches applications through `IOHIDVirtualService`, which Sidecar drives
+  under `com.apple.private.hid.client.event-dispatch`. Private, not issuable to third
+  parties, and confirmed live: Sidecar's touchscreen exists in the HID service list with
+  no registry object, no descriptor and no readable properties.
+- `AppleMultitouchHIDService` *will* adopt a third-party virtual device, without any
+  impersonation — but it then expects Apple's undocumented multitouch protocol, and no
+  amount of geometry supplied through IOKit properties substitutes for it.
+
+So there are two doors. One is private. The other opens onto a protocol with no
+specification and no reference implementation to copy.
+
+## What is worth doing instead
+
+1. **Keep the existing CGEvent synthesis.** It works, and nothing found here improves on it.
+2. **File the Feedback Assistant report** (drafted in `FEEDBACK.md`). The evidence is
+   unusually concrete, and the ask is small and specific.
+3. **Report `NSScreen.touchCapabilities` in diagnostics** — ten lines, and it distinguishes
+   "this user has a Sidecar iPad" from "this user has a third-party panel", which produce
+   very different bug reports.
+
+A direction deliberately not pursued: emulating a Magic Trackpad rather than a touchscreen.
+`AppleMultitouchHIDService` adoption already works, and Apple drives real Magic Trackpads
+over HID, so native scroll, pinch and swipe might be reachable that way. It would mean
+indirect input — relative pointer motion, losing the absolute "touch what you want" premise
+unless combined with the current synthesis — and it still requires the same undocumented
+protocol. Worth remembering, not worth starting today.
