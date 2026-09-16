@@ -80,3 +80,51 @@ properties copied in shape from the trackpad, feed the same sweep, and see wheth
 anything arrives. If geometry alone is enough, the format question may answer itself. If
 not, the remaining work is reverse-engineering Apple's multitouch frame format, which is
 a different size of undertaking and considerably more fragile than the plan assumed.
+
+## Round 3 — geometry was not the missing piece
+
+Seven variants, same machine. Adoption reproduced exactly: B3, B1, B5, B6 and B7 claimed;
+B2 and B4 not. **Touches delivered: zero, in every case.**
+
+The geometry properties did reach our HID device — B5, B6 and B7 carry
+`Sensor Surface Width`/`Height`, `Sensor Rows`/`Columns`, the region descriptors and
+`MTHIDDevice`, where B3 and B1 carry none. But they went no further. The
+`AppleMultitouchDevice` created underneath is identical either way:
+
+```
+"Multitouch ID", "MT Built-In", "Multitouch Serial Number", "Max Packet Size" = 1024,
+"parser-type" = 1, "parser-options" = 16, "DeviceUsagePairs", "Transport" = "Virtual",
+"Product", "HIDServiceSupport", plus IOKit bookkeeping
+```
+
+No sensor geometry, no `Family ID`, no surface descriptors — with or without our
+properties, and regardless of `Family ID` being declared (B6 behaves as B5).
+
+So the multitouch driver does not take geometry from IOKit properties. The real trackpad's
+surface descriptors come from the device itself, through the multitouch protocol, and a
+device that answers nothing never gets past being an empty shell. B5 and B6 also fed no
+reports at all — there is no known report layout for the vendor page — so the one
+informative feed was B7: Apple's own descriptor, geometry attached, 60 frames of a
+two-contact sweep, nothing out.
+
+## Where the wall is
+
+Everything up to the protocol works, and nothing beyond it does:
+
+- a third-party process **can** publish a virtual HID device (needs the entitlement, which
+  is grantable);
+- that device **is** adopted by `AppleMultitouchHIDService`, without impersonating Apple;
+- the adopted device produces **no touch events**, because it does not speak Apple's
+  multitouch protocol (`parser-type 1`), which is undocumented, and there is no reference
+  to copy — Sidecar reaches the event system by a different, private route entirely.
+
+What would be needed next is emulating that protocol: answering whatever the driver asks
+of a device during setup, then emitting frames in the binary format of some multitouch
+family. That is reverse engineering of an interface Apple has never published, with no
+compatibility promise, in a code path that already has a working alternative.
+
+One cheap probe remains before giving up on it: register a `GetReport` handler on the
+virtual device and log what the multitouch driver asks for. If it requests feature reports
+during setup, their IDs and lengths are a map of what it wants. If it asks for nothing,
+the protocol is input-report-driven and the only way forward is guessing, which is where
+this should stop.
