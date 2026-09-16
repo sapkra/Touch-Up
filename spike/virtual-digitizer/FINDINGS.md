@@ -21,10 +21,12 @@ B1 versus B2 differ only in the manufacturer string, so the `Manufacturer == "Ap
 condition on the `(0x0D,0x04)` personality is real and enforced. That is the argument for
 building on B3 rather than B1.
 
-B4 tested nothing useful: the panel declares
-`{1/2 mouse, 1/1 pointer, 13/5 TouchPad, 65280/12}` — TouchPad, not TouchScreen, with a
-mouse collection first — so it never matched the personality. Its failure says nothing
-about whether a cloned descriptor parses.
+B4 tested nothing useful, and worse than that, it tested the wrong hardware. The
+touchscreen this project exists for was never connected to the spike machine, so the
+capture took the first digitizer-ish device it found — that machine's own pointing device
+— and cloned it. Everything said about "the panel declaring `13/5 TouchPad`" refers to
+that, not to any touchscreen. Nothing is known here about how the real panel announces
+itself, and nothing needs to be: the route that worked fabricates its own descriptor.
 
 **But no touches came out of any of them.** Zero gesture-recognizer callbacks. The reason
 is visible in the registry: our claimed multitouch device has 17 properties where the

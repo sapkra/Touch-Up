@@ -150,11 +150,33 @@ static int DumpRealDescriptor(const char *outPath) {
             CFIndex len = CFDataGetLength(desc);
             printf("real digitizer: \"%s\" by \"%s\", descriptor %ld bytes\n",
                    productBuf, manufacturerBuf, (long)len);
+
+            // Whose descriptor this is matters as much as the bytes. Taking the first
+            // match silently once meant a whole variant cloned a laptop's own trackpad
+            // while everyone believed it was testing an external touchscreen.
+            if (strstr(productBuf, "Internal") || strstr(productBuf, "Trackpad")
+                || strstr(manufacturerBuf, "Apple")) {
+                printf("\n  ** WARNING: that looks like a built-in or Apple pointing device,\n");
+                printf("  ** not an external touchscreen. If you meant to capture a\n");
+                printf("  ** touchscreen, connect it and run this again.\n\n");
+            }
+
             FILE *f = fopen(outPath, "wb");
             if (f) {
                 fwrite(CFDataGetBytePtr(desc), 1, (size_t)len, f);
                 fclose(f);
                 printf("wrote %s\n", outPath);
+
+                // Record what it came from, beside the bytes.
+                char notePath[1024];
+                snprintf(notePath, sizeof(notePath), "%s.source.txt", outPath);
+                FILE *n = fopen(notePath, "w");
+                if (n) {
+                    fprintf(n, "captured from: \"%s\" by \"%s\" (%ld bytes)\n",
+                            productBuf, manufacturerBuf, (long)len);
+                    fclose(n);
+                    printf("wrote %s\n", notePath);
+                }
                 status = 0;
             }
             break;
