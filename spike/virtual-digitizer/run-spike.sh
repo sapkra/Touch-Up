@@ -126,14 +126,18 @@ run_variant() {
 
   note "created:            $([ "$created" -gt 0 ] && echo YES || echo "NO — kernel refused")"
   note "screen multitouch:  $([ "$multitouch" -gt 0 ] && echo YES || echo no)  (baseline was $BASELINE_MT)"
+  local pointer
+  pointer=$(grep -c "POINTER MOVED" "$out.publish.log")
+  note "pointer moved:      $([ "$pointer" -gt 0 ] && echo "YES — the system acted on our reports" || echo no)"
   note "direct touches:     $gestures"
   note "mouse-driven:       $mouseish  (emulated, or you touched the mouse)"
 
-  printf '%-4s created=%-3s claimed=%-3s multitouch=%-3s touches=%s\n' \
+  printf '%-4s created=%-3s claimed=%-3s multitouch=%-3s pointer=%-3s touches=%s\n' \
     "$name" \
     "$([ "$created" -gt 0 ] && echo yes || echo no)" \
     "$([ "$claimed" -gt 0 ] && echo yes || echo no)" \
     "$([ "$multitouch" -gt 0 ] && echo yes || echo no)" \
+    "$([ "$pointer" -gt 0 ] && echo yes || echo no)" \
     "$gestures" >> results/SUMMARY.txt
 }
 

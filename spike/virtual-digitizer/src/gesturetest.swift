@@ -47,10 +47,18 @@ final class TouchView: NSView {
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 
-let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 900, height: 700),
-                      styleMask: [.titled, .closable, .resizable],
+// Full screen, floating and borderless. The synthetic sweep crosses most of the display,
+// so a window occupying a corner of it would miss nearly every touch and report silence
+// that says nothing about whether events were delivered.
+let screenFrame = NSScreen.main?.frame ?? NSRect(x: 0, y: 0, width: 1920, height: 1080)
+let window = NSWindow(contentRect: screenFrame,
+                      styleMask: [.borderless],
                       backing: .buffered, defer: false)
 window.title = "Touch Up — gesture oracle"
+window.level = .floating
+window.isOpaque = false
+window.backgroundColor = NSColor.black.withAlphaComponent(0.15)
+window.ignoresMouseEvents = false
 
 let view = TouchView(frame: window.contentLayoutRect)
 view.autoresizingMask = [.width, .height]
@@ -70,7 +78,7 @@ window.contentView = view
 window.makeKeyAndOrderFront(nil)
 app.activate(ignoringOtherApps: true)
 
-print("[gesture] window up; recognizers installed (click, pan). allowedTouchTypes: click=\(click.allowedTouchTypes.rawValue) pan=\(pan.allowedTouchTypes.rawValue)")
+print("[gesture] window up covering \(screenFrame); recognizers installed (click, pan). allowedTouchTypes: click=\(click.allowedTouchTypes.rawValue) pan=\(pan.allowedTouchTypes.rawValue)")
 fflush(stdout)
 
 let seconds = CommandLine.arguments.count > 1 ? Double(CommandLine.arguments[1]) ?? 60 : 60

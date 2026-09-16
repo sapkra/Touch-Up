@@ -17,6 +17,7 @@
 #include <IOKit/hid/IOHIDManager.h>
 #include <IOKit/hidsystem/IOHIDUserDevice.h>
 #include <IOKit/hidsystem/IOHIDLib.h>
+#include <CoreGraphics/CoreGraphics.h>
 #include <dispatch/dispatch.h>
 #include <mach/mach_time.h>
 #include <stdio.h>
@@ -173,6 +174,21 @@ static int DumpRealDescriptor(const char *outPath) {
 
 typedef struct { uint8_t index; bool touching; uint16_t x, y; } Contact;
 
+/**
+ Where the pointer is, which is the one oracle that depends on nothing.
+
+ A window can be the wrong size, behind something, or not focused, and a gesture
+ recognizer then reports nothing whether or not events were delivered. The pointer is
+ none of those things: if our reports are reaching the system as input of any kind, this
+ moves. Reading it needs no permission.
+ */
+static CGPoint PointerLocation(void) {
+    CGEventRef probe = CGEventCreate(NULL);
+    CGPoint where = CGEventGetLocation(probe);
+    CFRelease(probe);
+    return where;
+}
+
 static void PackSidecarReport(uint8_t *out, const Contact *contacts, size_t count, uint16_t scanTime) {
     memset(out, 0, kSidecarReportLength);
     out[0] = 5;   // report ID
@@ -223,6 +239,7 @@ static void PackStandardReport(uint8_t *out, const Contact *contacts, size_t cou
 }
 
 static void FeedStandardSweep(IOHIDUserDeviceRef dev) {
+    CGPoint pointerBefore = PointerLocation();
     uint8_t report[kStandardReportLength];
     const int frames = 60;
     printf("feeding %d frames of a two-contact sweep (standard digitizer layout)...\n", frames);
@@ -245,11 +262,18 @@ static void FeedStandardSweep(IOHIDUserDeviceRef dev) {
 
     PackStandardReport(report, NULL, 0);
     IOHIDUserDeviceHandleReportWithTimeStamp(dev, mach_absolute_time(), report, sizeof(report));
-    printf("sweep done\n");
+
+    CGPoint pointerAfter = PointerLocation();
+    printf("sweep done; pointer %.0f,%.0f -> %.0f,%.0f  POINTER %s\n",
+           pointerBefore.x, pointerBefore.y, pointerAfter.x, pointerAfter.y,
+           (pointerBefore.x != pointerAfter.x || pointerBefore.y != pointerAfter.y)
+               ? "MOVED — the system is acting on our reports"
+               : "did not move");
     fflush(stdout);
 }
 
 static void FeedSidecarSweep(IOHIDUserDeviceRef dev) {
+    CGPoint pointerBefore = PointerLocation();
     uint8_t report[kSidecarReportLength];
     const int frames = 60;
     printf("feeding %d frames of a two-contact sweep...\n", frames);
@@ -273,7 +297,13 @@ static void FeedSidecarSweep(IOHIDUserDeviceRef dev) {
     // Lift: contact count zero, nothing touching.
     PackSidecarReport(report, NULL, 0, (uint16_t)(frames * 100));
     IOHIDUserDeviceHandleReportWithTimeStamp(dev, mach_absolute_time(), report, sizeof(report));
-    printf("sweep done\n");
+
+    CGPoint pointerAfter = PointerLocation();
+    printf("sweep done; pointer %.0f,%.0f -> %.0f,%.0f  POINTER %s\n",
+           pointerBefore.x, pointerBefore.y, pointerAfter.x, pointerAfter.y,
+           (pointerBefore.x != pointerAfter.x || pointerBefore.y != pointerAfter.y)
+               ? "MOVED — the system is acting on our reports"
+               : "did not move");
     fflush(stdout);
 }
 
