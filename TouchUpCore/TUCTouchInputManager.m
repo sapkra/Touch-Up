@@ -14,6 +14,25 @@
 
 #import <Carbon/Carbon.h> // key codes for the system navigation shortcuts
 
+/// A running count of what the identity repair saw on one panel.
+@interface TUCContactIdentityTally : NSObject
+@property NSUInteger contactsCreated;
+/// Contacts that stopped being reported without ever saying they had lifted. This is the
+/// incidence of the fault itself; on a healthy panel it stays at zero.
+@property NSUInteger vanishedWithoutLift;
+@property NSUInteger repairs;
+@property NSUInteger refusedTooFar;
+@property NSUInteger refusedTooOld;
+@property NSUInteger refusedAmbiguous;
+@property NSUInteger refusedAlreadyLifted;
+@property NSUInteger refusedNoScreen;
+/// Repairs the panel contradicted by reporting the old contact ID again straight after.
+@property NSUInteger contradicted;
+@property NSUInteger mostResumesOnOneFinger;
+@property CGFloat nearestRefusalDistance;
+@end
+
+
 @interface TUCTouchInputManager ()
 
 @property NSMutableDictionary<NSNumber *, NSNumber *> *frameIDsByLocationID;
@@ -42,6 +61,10 @@
 
 /// Whether a gesture is currently being fed to the virtual trackpad, so that lifting the
 /// fingers closes it exactly once and a fresh set of fingers is not read as a continuation.
+/// What the identity repair has seen on one panel. Diagnostics only — nothing reads these
+/// to decide anything, and they exist because this fault happens on someone else's desk.
+@property (strong) NSMutableDictionary<NSNumber *, TUCContactIdentityTally *> *contactTallies;
+
 @property BOOL nativeGestureInFlight;
 
 /// Where the fingers were when the gesture opened, in the panel's own space. Movement is
@@ -190,6 +213,52 @@ static const NSTimeInterval kForeignPointerGracePeriod = 0.2;
 static const NSTimeInterval kFingerCountSettleTime = 0.08;
 
 
+#pragma mark - Contact identity repair
+
+/**
+ How long after a contact stops being reported it may still be claimed by a new one.
+
+ Bounded from both sides. It has to be shorter than any deliberate lift-and-put-down: the
+ fastest sustained human retapping is seven or eight a second, and a double click is a
+ hundred and fifty milliseconds or more between release and press, so staying well under
+ half of that means a real second tap can never be swallowed into the first. It also has to
+ be shorter than `kFingerCountSettleTime`, or a repair could arrive after the gate it exists
+ to protect had already reopened.
+
+ And it has to be long enough to span the gap, which is a few reports. Fifty-five
+ milliseconds is five reports at 100 Hz and under two at 33 Hz — hence the floor below.
+ */
+static const NSTimeInterval kContactRepairWindow = 0.055;
+
+/// Slow panels get a window of three reports instead, since a fixed time can be less than a
+/// single one of theirs. Capped so it can never approach a deliberate retap.
+static const NSTimeInterval kContactRepairWindowCeiling = 0.09;
+
+/// How far a finger may appear to have jumped and still be the same finger, before its
+/// speed is taken into account. A fingertip is eight to twelve millimetres across and the
+/// centroid a panel reports moves within that when it loses and re-acquires a contact.
+static const CGFloat kContactRepairBaseDistance = 5.0;
+
+/// A brisk flick. The estimated speed is clamped to it so that one noisy step cannot open
+/// the gate wide: unclamped, a single spurious eight-millimetre step at 100 Hz reads as
+/// eight hundred millimetres a second and would buy forty millimetres of allowance.
+static const CGFloat kContactRepairMaxSpeed = 600.0;
+
+/**
+ The hard ceiling on that allowance, and the rail that actually does the work.
+
+ Two fingertips side by side sit fifteen to twenty millimetres apart centre to centre, so a
+ limit below that means no combination of speed and delay can ever let one finger's ghost
+ claim a contact that really belongs to another. It is also the largest jump the first
+ repaired report can hand to the scroll delta, which is visible but not a teleport.
+ */
+static const CGFloat kContactRepairMaxDistance = 12.0;
+
+/// Two candidates within this of each other are not tellable apart by position, and a wrong
+/// guess costs more than refusing to guess.
+static const CGFloat kContactRepairAmbiguityMargin = 4.0;
+
+
 /**
  How far the virtual trackpad is told the fingers moved, against how far they really did.
 
@@ -327,6 +396,10 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     }
     return @"?";
 }
+
+
+@implementation TUCContactIdentityTally
+@end
 
 
 @implementation TUCTouchInputManager
@@ -732,6 +805,7 @@ static NSString *TUCNameForDigitizerKind(TUCDigitizerKind kind) {
 
     [self.frameIDsByLocationID removeObjectForKey:@(locationID)];
     [self.reportRatesByLocationID removeObjectForKey:@(locationID)];
+    [self.contactTallies removeObjectForKey:@(locationID)];
     [self.rateWindowStartFrameByLocationID removeObjectForKey:@(locationID)];
     [self.rateWindowStartTimeByLocationID removeObjectForKey:@(locationID)];
     [self.delegate touchscreenDidDisconnectWithLocationID:locationID];
@@ -748,15 +822,54 @@ static NSString *TUCNameForDigitizerKind(TUCDigitizerKind kind) {
 - (void)didProcessReportForLocationID:(uint32_t)locationID {
     // go through all touches: if the frame is not the latest one, the touch might be old and should be removed.
     NSInteger currentFrameID = [self currentFrameIDForLocationID:locationID];
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    NSTimeInterval repairWindow = [self contactRepairWindowForLocationID:locationID];
 
     for (TUCTouch *touch in self.touchSet) {
         if (touch.locationID != locationID) continue;
 
         BOOL missedTooManyReports = touch.lastUpdated + self.errorResistance < currentFrameID;
 
-        if (missedTooManyReports || [self hasTouchBeenAbandoned:touch]) {
+        // Hold the frame-count cancel off while this contact could still be claimed by a
+        // renumbered one. `errorResistance` counts reports, so what it means in time swings by
+        // a factor of four between a 33 Hz panel and a 100 Hz one — ample on one, and gone
+        // before the repair window even opens on the other. The abandon clock below is always
+        // longer than the window, so nothing can be stranded by waiting.
+        BOOL couldStillBeClaimed = (self.contactIdentityRepair != TUCContactIdentityRepairOff)
+                                    && touch.isActive
+                                    && (now - touch.lastUpdatedTime) < repairWindow;
+
+        if ((missedTooManyReports && !couldStillBeClaimed) || [self hasTouchBeenAbandoned:touch]) {
+            // A contact that stopped being reported without ever saying it had lifted. This is
+            // the fault itself, counted whether or not anything is done about it.
+            if (touch.isActive) {
+                [self contactTallyForLocationID:locationID].vanishedWithoutLift++;
+            }
+
             [touch setPhase:NSTouchPhaseCancelled];
             [self removeTouch:touch now:NO];
+        }
+    }
+
+    // Did the panel take back a repair? If a finger was resumed under a new contact ID and the
+    // old one turns up again in the same report, the guess was wrong. Nothing is unwound — the
+    // damage is one frame of exactly the behaviour we had before — but a count that never
+    // leaves zero is what says the distance rail is holding.
+    if (self.contactIdentityRepair == TUCContactIdentityRepairOn) {
+        for (TUCTouch *resumed in self.touchSet) {
+            if (resumed.locationID != locationID || resumed.previousContactID == NSNotFound) continue;
+            if (resumed.lastUpdated != currentFrameID) continue;
+
+            for (TUCTouch *other in self.touchSet) {
+                if (other == resumed || other.locationID != locationID) continue;
+                if (other.contactID == resumed.previousContactID && other.lastUpdated == currentFrameID) {
+                    [self contactTallyForLocationID:locationID].contradicted++;
+                    [self logGesture:[NSString stringWithFormat:
+                                      @"  same finger? contradicted: contact %ld came back",
+                                      (long)resumed.previousContactID]];
+                    break;
+                }
+            }
         }
     }
 
@@ -919,14 +1032,26 @@ static NSString *TUCNameForDigitizerKind(TUCDigitizerKind kind) {
         }
     }
 
+    // Converted before the touch is obtained rather than after, because deciding whether this
+    // contact is a finger we already know requires knowing where it is. The conversion reads
+    // nothing from the touch, so moving it earlier changes nothing else.
+    CGPoint relativePoint = CGPointZero;
+    if (!isSuspectOriginReport) {
+        relativePoint = [self convertDigitizerPointToRelativeScreenPoint:digitizerPoint locationID:locationID];
+    }
+
     BOOL isNewTouch = NO;
-    TUCTouch *touch = [self obtainTouchWithID:contactID locationID:locationID isNew:&isNewTouch];
+    TUCTouch *touch = [self obtainTouchWithID:contactID
+                                   locationID:locationID
+                              atRelativePoint:relativePoint
+                                 pointIsKnown:!isSuspectOriginReport
+                                        isNew:&isNewTouch];
 
     // Keep the last known position when the lift-off report has none to give. The click this tap
     // is about to produce is posted at `touch.location`, so taking the reported zeroes would put
     // it in the top-left corner of the screen.
     if (!isSuspectOriginReport) {
-        [touch setLocation:[self convertDigitizerPointToRelativeScreenPoint:digitizerPoint locationID:locationID]];
+        [touch setLocation:relativePoint];
     } else {
         [self noteOnceForLocationID:locationID
                                key:@"zeroed-lift"
@@ -1016,10 +1141,25 @@ static NSString *TUCNameForDigitizerKind(TUCDigitizerKind kind) {
 
 
 - (void)updateTouch:(NSInteger)contactID locationID:(uint32_t)locationID withSize:(CGSize)size azimuth:(CGFloat)azimuth {
-    BOOL isNewTouch = NO;
-    TUCTouch *touch = [self obtainTouchWithID:contactID locationID:locationID isNew:&isNewTouch];
-    [touch setLastUpdated:[self currentFrameIDForLocationID:locationID]];
-    
+    // Looks up, never creates. A size carries no position, so a touch created here would sit
+    // at the corner of the screen with no way to know better — and would then be offered to
+    // the identity repair as a candidate for a finger that vanished. The interpreter always
+    // sends a contact's position before its size, so arriving here first means the panel is
+    // doing something the rest of this file does not expect, and saying so is more use than
+    // inventing a finger.
+    TUCTouch *touch = [self findTouchWithID:contactID locationID:locationID includingPastTouches:NO];
+    if (touch == nil) {
+        [self noteOnceForLocationID:locationID
+                                key:@"size-before-position"
+                            message:@"reports a contact's size before its position. The size is "
+                                     "being ignored, since there is no finger on record to "
+                                     "attach it to."];
+        return;
+    }
+
+    // Deliberately not touching `lastUpdated`: the position report is what says a contact is
+    // still alive, and letting a size report say it too would mask a contact that has in fact
+    // stopped being positioned.
     [touch setSize:size];
     [touch setAzimuth:azimuth];
 }
@@ -2194,7 +2334,11 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
 /**
  Returns the existing touch object or a new one if this ID does not exist in the set yet.
  */
-- (TUCTouch *)obtainTouchWithID:(NSInteger)contactID locationID:(uint32_t)locationID isNew:(BOOL*)isNew {
+- (TUCTouch *)obtainTouchWithID:(NSInteger)contactID
+                     locationID:(uint32_t)locationID
+                atRelativePoint:(CGPoint)point
+                   pointIsKnown:(BOOL)pointIsKnown
+                          isNew:(BOOL*)isNew {
     TUCTouch *touch = [self findTouchWithID:contactID locationID:locationID includingPastTouches:NO];
 
     // A contact whose last report is old is not the finger now arriving under the same ID. Reusing
@@ -2208,12 +2352,200 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
     }
 
     *isNew = NO;
-    if(!touch) {
-        touch = [[TUCTouch alloc] initWithContactID:contactID locationID:locationID];
-        [self.touchSet addObject:touch];
-        *isNew = YES;
+    if (touch) {
+        return touch;
     }
+
+    // Nothing is using this contact ID. Before deciding a new finger has landed, ask whether
+    // one we already know just stopped being reported under a different number — which is a
+    // thing panels do, and which otherwise arrives as a second finger.
+    if (pointIsKnown && self.contactIdentityRepair != TUCContactIdentityRepairOff) {
+        NSString *reason = nil;
+        TUCTouch *resumable = [self touchToResumeForContactID:contactID
+                                                   locationID:locationID
+                                              atRelativePoint:point
+                                                       reason:&reason];
+        if (reason != nil) {
+            [self logGesture:[NSString stringWithFormat:@"  %@", reason]];
+        }
+
+        if (resumable != nil) {
+            TUCContactIdentityTally *tally = [self contactTallyForLocationID:locationID];
+            tally.repairs++;
+
+            if (self.contactIdentityRepair == TUCContactIdentityRepairOn) {
+                [resumable resumeUnderContactID:contactID];
+                tally.mostResumesOnOneFinger = MAX(tally.mostResumesOnOneFinger, resumable.timesResumed);
+                return resumable;      // not new: the gesture state stays attached to it
+            }
+            // Observing only: counted, and then left alone so the stream is exactly as it was.
+        }
+    }
+
+    touch = [[TUCTouch alloc] initWithContactID:contactID locationID:locationID];
+    [self.touchSet addObject:touch];
+    [self contactTallyForLocationID:locationID].contactsCreated++;
+    *isNew = YES;
     return touch;
+}
+
+
+#pragma mark - Is this a finger we already know?
+
+- (TUCContactIdentityTally *)contactTallyForLocationID:(uint32_t)locationID {
+    TUCContactIdentityTally *tally = self.contactTallies[@(locationID)];
+    if (tally == nil) {
+        tally = [TUCContactIdentityTally new];
+        tally.nearestRefusalDistance = CGFLOAT_MAX;
+        self.contactTallies[@(locationID)] = tally;
+    }
+    return tally;
+}
+
+
+- (CGFloat)reportRateForLocationID:(uint32_t)locationID {
+    return [self.reportRatesByLocationID[@(locationID)] doubleValue];
+}
+
+
+/// Long enough to span a few of this panel's reports, without ever reaching as far as a
+/// deliberate second tap. A slow panel needs more time to produce the same number of reports,
+/// which is the whole reason this is not simply a constant.
+- (NSTimeInterval)contactRepairWindowForLocationID:(uint32_t)locationID {
+    CGFloat rate = [self reportRateForLocationID:locationID];
+    if (rate <= 0.0) {
+        return kContactRepairWindow;
+    }
+    return MIN(MAX(kContactRepairWindow, 3.0 / rate), kContactRepairWindowCeiling);
+}
+
+
+/**
+ The finger this contact most likely already is, or nil with a reason saying why not.
+
+ Always writes a reason, matched or not. The fault this exists for happens on somebody
+ else's desk, and "it still flaps" together with "refused: nearest contact was 31 mm away"
+ says immediately that the model is wrong, where silence would say nothing at all.
+ */
+- (TUCTouch *)touchToResumeForContactID:(NSInteger)contactID
+                             locationID:(uint32_t)locationID
+                        atRelativePoint:(CGPoint)point
+                                 reason:(NSString **)outReason {
+    TUCContactIdentityTally *tally = [self contactTallyForLocationID:locationID];
+
+    TUCScreen *screen = [self touchscreenForLocationID:locationID];
+    if (screen == nil) {
+        // Everything below is in millimetres, and without a screen there is no way to get
+        // there. A threshold in normalised units would mean something different on every
+        // panel, which is the mistake this file has already made once.
+        tally.refusedNoScreen++;
+        return nil;
+    }
+
+    NSInteger currentFrame = [self currentFrameIDForLocationID:locationID];
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    NSTimeInterval window = [self contactRepairWindowForLocationID:locationID];
+    CGFloat rate = [self reportRateForLocationID:locationID];
+
+    TUCTouch *best = nil;
+    TUCTouch *runnerUp = nil;
+    CGFloat bestDistance = CGFLOAT_MAX;
+    CGFloat runnerUpDistance = CGFLOAT_MAX;
+    CGFloat bestAllowance = 0.0;
+    NSTimeInterval bestGap = 0.0;
+
+    BOOL sawLiftedEarlier = NO;
+    BOOL sawTooOld = NO;
+    CGFloat nearestRefused = CGFLOAT_MAX;
+
+    for (TUCTouch *candidate in self.touchSet) {
+        if (candidate.locationID != locationID || candidate.contactID == contactID) {
+            continue;
+        }
+
+        // A contact that stopped being reported: still down as far as anyone here knows, but
+        // absent from this report. This is the shape the fault takes.
+        BOOL vanished = candidate.isActive && candidate.lastUpdated < currentFrame;
+
+        // A contact that said it had lifted, in this very report. Anything older has already
+        // had its tap posted, its gesture stopped and the cursor touch let go of — resuming
+        // it then would leave a finger on the glass with nothing driving it, which is worse
+        // than the fault. Cancelled contacts are past that point by definition.
+        BOOL liftedInThisReport = (candidate.phase == NSTouchPhaseEnded
+                                   && candidate.lastUpdated == currentFrame);
+
+        if (!vanished && !liftedInThisReport) {
+            if (candidate.phase == NSTouchPhaseEnded) {
+                sawLiftedEarlier = YES;
+            }
+            continue;
+        }
+
+        NSTimeInterval gap = now - candidate.lastUpdatedTime;
+        if (gap > window) {
+            sawTooOld = YES;
+            continue;
+        }
+
+        CGFloat distance = [screen millimetreDistanceBetweenRelativePoint:point and:candidate.location];
+
+        // A finger does not stop moving while the panel is failing to report it, so the
+        // allowance grows with how fast it was going and how long it was gone. Without this,
+        // the repair would refuse exactly the fast movements that provoke the fault.
+        CGFloat lastStep = [screen millimetreDistanceBetweenRelativePoint:candidate.location
+                                                                      and:candidate.previousLocation];
+        CGFloat speed = (rate > 0.0) ? MIN(lastStep * rate, kContactRepairMaxSpeed) : 0.0;
+        CGFloat allowance = MIN(kContactRepairBaseDistance + (speed * gap), kContactRepairMaxDistance);
+
+        if (distance > allowance) {
+            nearestRefused = MIN(nearestRefused, distance);
+            continue;
+        }
+
+        if (distance < bestDistance) {
+            runnerUp = best;
+            runnerUpDistance = bestDistance;
+            best = candidate;
+            bestDistance = distance;
+            bestAllowance = allowance;
+            bestGap = gap;
+        } else if (distance < runnerUpDistance) {
+            runnerUp = candidate;
+            runnerUpDistance = distance;
+        }
+    }
+
+    if (best != nil && runnerUp != nil && (runnerUpDistance - bestDistance) < kContactRepairAmbiguityMargin) {
+        tally.refusedAmbiguous++;
+        *outReason = [NSString stringWithFormat:
+                      @"same finger? refused: two contacts equally close (%.1f mm and %.1f mm)",
+                      bestDistance, runnerUpDistance];
+        return nil;
+    }
+
+    if (best != nil) {
+        *outReason = [NSString stringWithFormat:
+                      @"same finger: contact %ld → %ld, %.1f mm in %.0f ms (allowed %.1f mm)",
+                      (long)best.contactID, (long)contactID, bestDistance,
+                      bestGap * 1000.0, bestAllowance];
+        return best;
+    }
+
+    if (nearestRefused < CGFLOAT_MAX) {
+        tally.refusedTooFar++;
+        tally.nearestRefusalDistance = MIN(tally.nearestRefusalDistance, nearestRefused);
+        *outReason = [NSString stringWithFormat:
+                      @"same finger? refused: nearest contact was %.1f mm away", nearestRefused];
+    } else if (sawTooOld) {
+        tally.refusedTooOld++;
+        *outReason = [NSString stringWithFormat:
+                      @"same finger? refused: nothing vanished within %.0f ms", window * 1000.0];
+    } else if (sawLiftedEarlier) {
+        tally.refusedAlreadyLifted++;
+        *outReason = @"same finger? refused: the nearby contact lifted in an earlier report";
+    }
+
+    return nil;
 }
 
 
@@ -2650,6 +2982,13 @@ static const CGFloat kResizeBorderWidth = 8.0;
 
         self.frameIDsByLocationID = [NSMutableDictionary new];
         self.reportRatesByLocationID = [NSMutableDictionary new];
+        self.contactTallies = [NSMutableDictionary new];
+
+        // Observing, not acting. The fault this addresses happens on panels we cannot watch,
+        // so the first thing it should do is measure itself: the diagnostics report says what
+        // it would have done, and nothing about the touch stream changes until somebody has
+        // read that and turned it on.
+        self.contactIdentityRepair = TUCContactIdentityRepairObserve;
         self.rateWindowStartTimeByLocationID = [NSMutableDictionary new];
         self.rateWindowStartFrameByLocationID = [NSMutableDictionary new];
         self.notedDeviceObservations = [NSMutableSet new];
@@ -2761,6 +3100,24 @@ static const CGFloat kResizeBorderWidth = 8.0;
                               : @"synthesised (native was asked for and is not running)"]];
     } else {
         [lines addObject:@"Gestures: synthesised"];
+    }
+
+    {
+        NSUInteger repairs = 0, refusals = 0, vanished = 0;
+        for (NSNumber *key in self.contactTallies) {
+            TUCContactIdentityTally *tally = self.contactTallies[key];
+            repairs  += tally.repairs;
+            vanished += tally.vanishedWithoutLift;
+            refusals += tally.refusedTooFar + tally.refusedTooOld
+                      + tally.refusedAmbiguous + tally.refusedAlreadyLifted;
+        }
+        // Only when the panel has actually misbehaved, so a healthy one shows nothing.
+        if (vanished > 0 || repairs > 0) {
+            [lines addObject:[NSString stringWithFormat:@"Identity: %lu vanished, %lu %@, %lu refused",
+                              (unsigned long)vanished, (unsigned long)repairs,
+                              self.contactIdentityRepair == TUCContactIdentityRepairOn ? @"repaired" : @"would repair",
+                              (unsigned long)refusals]];
+        }
     }
 
     [lines addObject:[NSString stringWithFormat:@"Slop:     %.1f mm of %.1f mm",
@@ -2912,6 +3269,75 @@ static const CGFloat kResizeBorderWidth = 8.0;
          self.tapTolerance,       self.tapTolerance       * [screen pixelsPerMM],
          kHoldStillnessTolerance * [screen pixelsPerMM],
          kSwipeCommitDistance    * [screen pixelsPerMM]];
+    }
+
+    [report appendString:@"\n───── Contact identity ─────\n"];
+    {
+        NSString *mode = @"off";
+        if (self.contactIdentityRepair == TUCContactIdentityRepairObserve) mode = @"observing (counting only, changing nothing)";
+        if (self.contactIdentityRepair == TUCContactIdentityRepairOn)      mode = @"on";
+        [report appendFormat:@"mode: %@\n", mode];
+
+        if (self.contactTallies.count == 0) {
+            [report appendString:@"(nothing seen yet)\n"];
+        }
+
+        for (NSNumber *key in self.contactTallies) {
+            uint32_t locationID = key.unsignedIntValue;
+            TUCContactIdentityTally *tally = self.contactTallies[key];
+            CGFloat rate = [self reportRateForLocationID:locationID];
+
+            [report appendFormat:@"digitizer %#010x   %lu contacts began, "
+                                  "%lu stopped being reported without lifting\n",
+             locationID, (unsigned long)tally.contactsCreated,
+             (unsigned long)tally.vanishedWithoutLift];
+
+            // The one number that says whether this panel has the fault at all. Everything
+            // else in this section is about what was done in response to it.
+            if (tally.vanishedWithoutLift == 0) {
+                [report appendFormat:@"digitizer %#010x   no contact has ever vanished mid-touch "
+                                      "— this panel does not appear to have the fault\n", locationID];
+            }
+
+            [report appendFormat:@"digitizer %#010x   %lu %@; refused: %lu too far, %lu too old, "
+                                  "%lu ambiguous, %lu already lifted, %lu no screen\n",
+             locationID, (unsigned long)tally.repairs,
+             self.contactIdentityRepair == TUCContactIdentityRepairOn ? @"repairs" : @"would have been repaired",
+             (unsigned long)tally.refusedTooFar, (unsigned long)tally.refusedTooOld,
+             (unsigned long)tally.refusedAmbiguous, (unsigned long)tally.refusedAlreadyLifted,
+             (unsigned long)tally.refusedNoScreen];
+
+            if (tally.refusedTooFar > 0 && tally.nearestRefusalDistance < CGFLOAT_MAX) {
+                // If this is only a little over the ceiling, the ceiling is the thing to
+                // question. If it is enormous, the contacts were never the same finger.
+                [report appendFormat:@"digitizer %#010x   closest refusal was %.1f mm "
+                                      "(ceiling %.0f mm)\n",
+                 locationID, tally.nearestRefusalDistance, kContactRepairMaxDistance];
+            }
+
+            if (tally.contradicted > 0) {
+                [report appendFormat:@"digitizer %#010x   %lu repairs contradicted by the panel "
+                                      "— the old contact came back\n",
+                 locationID, (unsigned long)tally.contradicted];
+            }
+
+            if (tally.mostResumesOnOneFinger > 0) {
+                [report appendFormat:@"digitizer %#010x   most times one finger was resumed: %lu\n",
+                 locationID, (unsigned long)tally.mostResumesOnOneFinger];
+            }
+
+            // Every millisecond above is relative to this, so it belongs beside them.
+            if (rate > 0.0) {
+                [report appendFormat:@"digitizer %#010x   %.0f Hz measured, repair window %.0f ms "
+                                      "(errorResistance %ld reports = %.0f ms)\n",
+                 locationID, rate, [self contactRepairWindowForLocationID:locationID] * 1000.0,
+                 (long)self.errorResistance, (self.errorResistance / rate) * 1000.0];
+            } else {
+                [report appendFormat:@"digitizer %#010x   report rate not measured yet, "
+                                      "repair window %.0f ms\n",
+                 locationID, [self contactRepairWindowForLocationID:locationID] * 1000.0];
+            }
+        }
     }
 
     [report appendString:@"\n───── Recent gestures ─────\n"];

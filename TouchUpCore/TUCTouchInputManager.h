@@ -156,6 +156,27 @@ NS_ASSUME_NONNULL_BEGIN
  everything carries on being synthesised as before. Check `nativeGesturesAreLive` for what
  is actually happening rather than what was asked for.
  */
+/**
+ What to do about a panel that renames a finger mid-stroke.
+
+ Some digitizers stop reporting a contact and start reporting the same finger under a
+ different contact ID a few milliseconds later. Identity here is the contact ID, so the
+ finger arrives as a second touch: the count of fingers down flickers, gestures restart,
+ and drags break in the middle.
+
+ `Observe` is the default and changes nothing — it works out what it *would* have done and
+ counts it, so the diagnostics report can say whether a panel actually has this fault and
+ how far apart the two contacts were. `On` acts on it. `Off` skips the question entirely.
+ */
+typedef NS_ENUM(NSUInteger, TUCContactIdentityRepair) {
+    TUCContactIdentityRepairOff = 0,
+    TUCContactIdentityRepairObserve,
+    TUCContactIdentityRepairOn,
+};
+
+@property (nonatomic) TUCContactIdentityRepair contactIdentityRepair;
+
+
 @property (nonatomic) BOOL usesNativeGestures;
 
 /// Whether the virtual trackpad exists *and* macOS has adopted it. False whenever gestures

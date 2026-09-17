@@ -78,6 +78,10 @@ struct SettingsView: View {
                 SettingsExplanationLabel(labels: model.uiLabels(for: \.isExclusiveAccessEnabled))
             }
 
+            Toggle(isOn: $model.isTouchRepairEnabled) {
+                SettingsExplanationLabel(labels: model.uiLabels(for: \.isTouchRepairEnabled))
+            }
+
             Toggle(isOn: $model.isNativeGesturesEnabled) {
                 SettingsExplanationLabel(labels: model.uiLabels(for: \.isNativeGesturesEnabled))
             }

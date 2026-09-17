@@ -29,6 +29,13 @@ class TouchUp: NSObject, ObservableObject {
     /// Take the touchscreen away from macOS, for panels it also tries to handle itself.
     @Published var isExclusiveAccessEnabled = false
 
+    /// Treat a contact that vanishes and reappears close by as the same finger.
+    ///
+    /// Off does not mean "do nothing": the core keeps observing and counting, because that
+    /// costs nothing and is what makes the diagnostics report able to say whether a panel has
+    /// this fault at all. Off means it does not act on what it sees.
+    @Published var isTouchRepairEnabled = false
+
     /// Let macOS produce scrolling, pinching and swipes itself, from a trackpad we publish
     /// and feed. One finger is unaffected and still points where it touches.
     @Published var isNativeGesturesEnabled = false
@@ -201,6 +208,7 @@ extension TouchUp {
             "isKioskModeEnabled" : false,
             "isExclusiveAccessEnabled" : false,
             "isNativeGesturesEnabled" : false,
+            "isTouchRepairEnabled" : false,
             "isGestureInspectorEnabled" : false,
 
             // Off by default. A machine with a keyboard attached does not want a second one taking
@@ -212,6 +220,7 @@ extension TouchUp {
         isKioskModeEnabled = defaults.bool(forKey: "isKioskModeEnabled")
         isExclusiveAccessEnabled = defaults.bool(forKey: "isExclusiveAccessEnabled")
         isNativeGesturesEnabled = defaults.bool(forKey: "isNativeGesturesEnabled")
+        isTouchRepairEnabled = defaults.bool(forKey: "isTouchRepairEnabled")
         isGestureInspectorEnabled = defaults.bool(forKey: "isGestureInspectorEnabled")
         isOnScreenKeyboardEnabled = defaults.bool(forKey: "isOnScreenKeyboardEnabled")
         isKeyboardAutoShowEnabled = defaults.bool(forKey: "isKeyboardAutoShowEnabled")
@@ -224,6 +233,12 @@ extension TouchUp {
             $isKioskModeEnabled.assign(to: \.kioskMode, on: touchManager),
             $isExclusiveAccessEnabled.sink { [weak self] enabled in
                 self?.touchManager.setTouchscreensSeized(enabled)
+            },
+
+            // Observing rather than off, so the diagnostics can still answer "does this panel
+            // drop contacts?" for somebody who has never turned the repair on.
+            $isTouchRepairEnabled.sink { [weak self] enabled in
+                self?.touchManager.contactIdentityRepair = enabled ? .on : .observe
             },
 
             $isNativeGesturesEnabled.sink { [weak self] enabled in
@@ -253,6 +268,7 @@ extension TouchUp {
         defaults.set(isKioskModeEnabled, forKey: "isKioskModeEnabled")
         defaults.set(isExclusiveAccessEnabled, forKey: "isExclusiveAccessEnabled")
         defaults.set(isNativeGesturesEnabled, forKey: "isNativeGesturesEnabled")
+        defaults.set(isTouchRepairEnabled, forKey: "isTouchRepairEnabled")
         defaults.set(isGestureInspectorEnabled, forKey: "isGestureInspectorEnabled")
         defaults.set(isOnScreenKeyboardEnabled, forKey: "isOnScreenKeyboardEnabled")
         defaults.set(isKeyboardAutoShowEnabled, forKey: "isKeyboardAutoShowEnabled")
@@ -503,6 +519,10 @@ extension TouchUp {
         case \.isExclusiveAccessEnabled:
             return("Exclusive Access",
                    "Take sole control of the touchscreen so macOS stops handling it too. Enable this if your screen still behaves like a trackpad, or if every touch seems to register twice. (EXPERIMENTAL)")
+
+        case \.isTouchRepairEnabled:
+            return("Repair Dropped Touches",
+                   "Some panels lose a finger for a moment while it is moving and report it again as a new one, which makes drags let go and gestures restart. This treats a contact that reappears in the same place a few milliseconds later as the finger it was. Leave it off if your screen behaves \u{2014} the diagnostics report says whether yours has this fault.")
 
         case \.isNativeGesturesEnabled:
             return("Let macOS Handle Gestures",
