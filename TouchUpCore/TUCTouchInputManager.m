@@ -29,6 +29,9 @@
 /// Repairs the panel contradicted by reporting the old contact ID again straight after.
 @property NSUInteger contradicted;
 @property NSUInteger mostResumesOnOneFinger;
+/// Whether this panel has ever reported a contact lifting. One that never does ends every
+/// touch by going quiet, so its "vanished without lifting" count is not evidence of a fault.
+@property BOOL hasEverReportedLift;
 @property CGFloat nearestRefusalDistance;
 @end
 
@@ -74,6 +77,10 @@
 /// How far apart they were when it opened, in millimetres. A pinch is the difference from
 /// this, which is the only part of the separation worth reproducing.
 @property CGFloat nativeGestureOriginSpreadMM;
+
+/// Which slot on the virtual trackpad each finger currently occupies, keyed by `identity`.
+/// Small, distinct and stable for the life of a gesture — see `-slotForNativeGestureTouch:`.
+@property (strong) NSMutableDictionary<NSNumber *, NSNumber *> *nativeGestureSlots;
 
 /// Set once the watchdog has seen macOS adopt the trackpad. Cached rather than asked for
 /// each time: answering it means a registry scan, and the question is asked per report.
@@ -232,7 +239,11 @@ static const NSTimeInterval kContactRepairWindow = 0.055;
 
 /// Slow panels get a window of three reports instead, since a fixed time can be less than a
 /// single one of theirs. Capped so it can never approach a deliberate retap.
-static const NSTimeInterval kContactRepairWindowCeiling = 0.09;
+/// Below `kFingerCountSettleTime`, which is the invariant the window exists inside: a repair
+/// arriving after that gate had reopened would be too late to prevent the thing it is for.
+/// A panel slower than about 40 Hz therefore gets less than the three reports it would like,
+/// and that is the right way round to lose.
+static const NSTimeInterval kContactRepairWindowCeiling = 0.075;
 
 /// How far a finger may appear to have jumped and still be the same finger, before its
 /// speed is taken into account. A fingertip is eight to twelve millimetres across and the
@@ -659,13 +670,48 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     for (NSUInteger i = 0; i < contributing.count; i++) {
         contacts[count].x = 0.5 + (travelMMx + offsetsMM[i].x) / kVirtualPadWidthMM;
         contacts[count].y = 0.5 + (travelMMy + offsetsMM[i].y) / kVirtualPadHeightMM;
-        // Likewise: this is what macOS tracks a finger by, so it has to survive the panel
-        // changing its mind about which contact number this finger is.
-        contacts[count].identifier = (uint8_t)((contributing[i].identity % 15) + 1);
+        // This is what macOS tracks a finger by, so it has to survive the panel changing its
+        // mind about which contact number this finger is — and it has to be distinct among
+        // the fingers actually down, which folding our identity into four bits would not be.
+        contacts[count].identifier = [self slotForNativeGestureTouch:contributing[i]];
         count++;
     }
 
     TUCVirtualTrackpadSubmit(contacts, count);
+}
+
+
+/**
+ A small number naming this finger on the virtual trackpad, distinct among the fingers
+ currently down and stable for as long as the gesture lasts.
+
+ It cannot simply be our identity, which counts every finger the process has ever seen: two
+ fingers down together whose identities happen to differ by a multiple of the range would
+ fold onto the same number, and macOS would see one finger where there are two — which is
+ the very fault all of this exists to prevent, arrived at by a different road.
+
+ Allocated on first sight and released when the gesture ends, so a finger keeps its number
+ for as long as it matters and no longer.
+ */
+- (uint8_t)slotForNativeGestureTouch:(TUCTouch *)touch {
+    NSNumber *existing = self.nativeGestureSlots[@(touch.identity)];
+    if (existing != nil) {
+        return (uint8_t)existing.unsignedCharValue;
+    }
+
+    // Lowest free slot. Never more than four fingers are ever sent, so this is a very short
+    // search over a very small set.
+    for (uint8_t slot = 1; slot <= 4; slot++) {
+        BOOL taken = NO;
+        for (NSNumber *used in self.nativeGestureSlots.allValues) {
+            if (used.unsignedCharValue == slot) { taken = YES; break; }
+        }
+        if (!taken) {
+            self.nativeGestureSlots[@(touch.identity)] = @(slot);
+            return slot;
+        }
+    }
+    return 1;
 }
 
 
@@ -677,6 +723,7 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     }
     TUCVirtualTrackpadLiftoff();
     self.nativeGestureInFlight = NO;
+    [self.nativeGestureSlots removeAllObjects];
     [self logGesture:@"  native gesture ended"];
 }
 
@@ -828,6 +875,13 @@ static NSString *TUCNameForDigitizerKind(TUCDigitizerKind kind) {
     for (TUCTouch *touch in self.touchSet) {
         if (touch.locationID != locationID) continue;
 
+        // A touch that has already ended or been cancelled is on its way out and its removal
+        // is already scheduled. Reaching it again would re-arm that removal every report —
+        // and since a re-arm now retires the previous one, the deletion would keep being
+        // pushed into the future for as long as the panel kept reporting, and the touch set
+        // would grow for the whole session.
+        if (!touch.isActive) continue;
+
         BOOL missedTooManyReports = touch.lastUpdated + self.errorResistance < currentFrameID;
 
         // Hold the frame-count cancel off while this contact could still be claimed by a
@@ -835,16 +889,16 @@ static NSString *TUCNameForDigitizerKind(TUCDigitizerKind kind) {
         // a factor of four between a 33 Hz panel and a 100 Hz one — ample on one, and gone
         // before the repair window even opens on the other. The abandon clock below is always
         // longer than the window, so nothing can be stranded by waiting.
-        BOOL couldStillBeClaimed = (self.contactIdentityRepair != TUCContactIdentityRepairOff)
+        // Only when the repair will actually act. Observing is documented as changing nothing,
+        // and holding the cancel off would change when the tap-via-cancel click lands.
+        BOOL couldStillBeClaimed = (self.contactIdentityRepair == TUCContactIdentityRepairOn)
                                     && touch.isActive
                                     && (now - touch.lastUpdatedTime) < repairWindow;
 
         if ((missedTooManyReports && !couldStillBeClaimed) || [self hasTouchBeenAbandoned:touch]) {
             // A contact that stopped being reported without ever saying it had lifted. This is
             // the fault itself, counted whether or not anything is done about it.
-            if (touch.isActive) {
-                [self contactTallyForLocationID:locationID].vanishedWithoutLift++;
-            }
+            [self contactTallyForLocationID:locationID].vanishedWithoutLift++;
 
             [touch setPhase:NSTouchPhaseCancelled];
             [self removeTouch:touch now:NO];
@@ -1113,6 +1167,7 @@ static NSString *TUCNameForDigitizerKind(TUCDigitizerKind kind) {
     [touch setLastUpdatedTime:[NSDate timeIntervalSinceReferenceDate]];
     
     if (!isOnSurface) {
+        [self contactTallyForLocationID:locationID].hasEverReportedLift = YES;
         [touch setPhase: NSTouchPhaseEnded];
         [self removeTouch:touch now:NO];
         [self.delegate touchesDidChange];
@@ -1147,7 +1202,11 @@ static NSString *TUCNameForDigitizerKind(TUCDigitizerKind kind) {
     // sends a contact's position before its size, so arriving here first means the panel is
     // doing something the rest of this file does not expect, and saying so is more use than
     // inventing a finger.
-    TUCTouch *touch = [self findTouchWithID:contactID locationID:locationID includingPastTouches:NO];
+    // Past touches included: a lift-off reports the position first, which ends the touch, and
+    // the size for that same contact arrives immediately after. Searching only live touches
+    // would miss it and accuse every panel that reports Width and Height of a fault it does
+    // not have, permanently, in the diagnostics.
+    TUCTouch *touch = [self findTouchWithID:contactID locationID:locationID includingPastTouches:YES];
     if (touch == nil) {
         [self noteOnceForLocationID:locationID
                                 key:@"size-before-position"
@@ -2463,9 +2522,14 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
             continue;
         }
 
-        // A contact that stopped being reported: still down as far as anyone here knows, but
-        // absent from this report. This is the shape the fault takes.
-        BOOL vanished = candidate.isActive && candidate.lastUpdated < currentFrame;
+        // A contact that stopped being reported: still down as far as anyone here knows, and
+        // absent for a whole report. This is the shape the fault takes.
+        //
+        // A *whole* report, not merely "not seen yet this one" — within a report the contacts
+        // are dispatched one collection at a time, and in hybrid mode across several HID
+        // reports, so a contact still to come this frame would otherwise look like it had
+        // vanished and could have its finger stolen by one genuinely landing nearby.
+        BOOL vanished = candidate.isActive && candidate.lastUpdated < (currentFrame - 1);
 
         // A contact that said it had lifted, in this very report. Anything older has already
         // had its tap posted, its gesture stopped and the cursor touch let go of — resuming
@@ -2492,8 +2556,15 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
         // A finger does not stop moving while the panel is failing to report it, so the
         // allowance grows with how fast it was going and how long it was gone. Without this,
         // the repair would refuse exactly the fast movements that provoke the fault.
-        CGFloat lastStep = [screen millimetreDistanceBetweenRelativePoint:candidate.location
-                                                                      and:candidate.previousLocation];
+        // A touch still in its first report has no previous position — it is the origin, and
+        // the distance from it would be the whole width of the panel, saturating the allowance
+        // at its ceiling. A finger that has only just landed has no measured speed, and
+        // pretending otherwise is the opposite of conservative.
+        BOOL hasMoved = (candidate.phase != NSTouchPhaseBegan);
+        CGFloat lastStep = hasMoved
+            ? [screen millimetreDistanceBetweenRelativePoint:candidate.location
+                                                         and:candidate.previousLocation]
+            : 0.0;
         CGFloat speed = (rate > 0.0) ? MIN(lastStep * rate, kContactRepairMaxSpeed) : 0.0;
         CGFloat allowance = MIN(kContactRepairBaseDistance + (speed * gap), kContactRepairMaxDistance);
 
@@ -2983,6 +3054,7 @@ static const CGFloat kResizeBorderWidth = 8.0;
         self.frameIDsByLocationID = [NSMutableDictionary new];
         self.reportRatesByLocationID = [NSMutableDictionary new];
         self.contactTallies = [NSMutableDictionary new];
+        self.nativeGestureSlots = [NSMutableDictionary new];
 
         // Observing, not acting. The fault this addresses happens on panels we cannot watch,
         // so the first thing it should do is measure itself: the diagnostics report says what
@@ -3297,6 +3369,11 @@ static const CGFloat kResizeBorderWidth = 8.0;
             if (tally.vanishedWithoutLift == 0) {
                 [report appendFormat:@"digitizer %#010x   no contact has ever vanished mid-touch "
                                       "— this panel does not appear to have the fault\n", locationID];
+            } else if (!tally.hasEverReportedLift) {
+                // Every touch on such a panel ends by going quiet, so the count above is how
+                // it works rather than evidence of anything wrong.
+                [report appendFormat:@"digitizer %#010x   this panel never reports lift-off, so the "
+                                      "count above is normal for it and not the fault\n", locationID];
             }
 
             [report appendFormat:@"digitizer %#010x   %lu %@; refused: %lu too far, %lu too old, "
