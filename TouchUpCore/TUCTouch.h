@@ -190,6 +190,51 @@ typedef NS_ENUM(NSUInteger, TUCSurfaceState) {
 @interface TUCTouch : NSObject
 
 @property (strong) NSUUID *uuid;
+
+/**
+ One finger, for as long as it is on the glass — and unlike `contactID`, ours rather than
+ the digitizer's.
+
+ A panel is free to stop reporting a contact and start reporting the same finger under a
+ different contact ID a few milliseconds later, and several of them do. Anything that has
+ to keep calling the same finger the same thing across reports has to key off something the
+ panel cannot change underneath it, which is this.
+
+ Distinct from `uuid` only in being cheap to compare and to put in a report. Both last the
+ life of the touch.
+ */
+@property (readonly) NSUInteger identity;
+
+/**
+ Rises whenever a deferred removal is scheduled, and again whenever the touch is resumed.
+
+ A `dispatch_after` cannot be called off once scheduled, so the block carries the value it
+ was scheduled under and does nothing if it no longer matches. Without it, a touch that is
+ resumed after ending would be deleted half a second later by a timer belonging to the life
+ it had before.
+ */
+@property (readonly) NSUInteger removalGeneration;
+
+/// The contact ID this touch had before it was resumed under another, or `NSNotFound`.
+/// Diagnostics, and how a repair that the panel later contradicts is noticed.
+@property (readonly) NSInteger previousContactID;
+
+/// How many times this finger has been resumed under a new contact ID.
+@property (readonly) NSUInteger timesResumed;
+
+/// Retires any pending deferred removal, so it will not fire against this touch.
+- (void)invalidatePendingRemoval;
+
+/**
+ Takes over a contact ID the digitizer has started using for this same finger.
+
+ Keeps everything that makes it the same touch: where it is, where it was, when it landed,
+ its identity and its uuid — so the gesture state held elsewhere against this object stays
+ attached to it. Only the contact ID changes, and the phase, which becomes `Stationary`
+ because the touch is still down and what it is doing is about to be recomputed from its
+ real movement.
+ */
+- (void)resumeUnderContactID:(NSInteger)contactID;
 @property NSInteger contactID;
 @property uint32_t locationID;
 

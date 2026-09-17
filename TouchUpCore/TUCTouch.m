@@ -38,6 +38,15 @@
     if (self = [super init]) {
         
         _uuid = [NSUUID UUID];
+
+        // Monotone for the life of the process. Only ever compared for equality and
+        // ordering, so wrapping after a few quintillion fingers is not a concern.
+        static NSUInteger nextIdentity = 1;
+        _identity = nextIdentity++;
+
+        _removalGeneration = 0;
+        _previousContactID = NSNotFound;
+        _timesResumed = 0;
         
         _contactID = contactID;
         _locationID = locationID;
@@ -72,6 +81,35 @@
 - (NSTouchPhase)phase {
     return _phase;
 }
+
+- (void)invalidatePendingRemoval {
+    _removalGeneration++;
+}
+
+
+- (void)resumeUnderContactID:(NSInteger)contactID {
+    _previousContactID = _contactID;
+    _contactID = contactID;
+    _timesResumed++;
+
+    // Any removal already scheduled belonged to the touch's previous life.
+    _removalGeneration++;
+
+    // Written straight to the ivars, deliberately. Going through `-setPhase:` would push
+    // the old phase into `_previousPhase`, and a `_previousPhase` of `Ended` makes the
+    // input manager skip both the phase classification and the tap-and-hold update for a
+    // whole report — the finger would be back but nothing would be watching it.
+    //
+    // `Stationary` is the honest placeholder: the finger is down, and what it is doing is
+    // recomputed from its real movement two lines after this returns.
+    _phase = NSTouchPhaseStationary;
+    _previousPhase = NSTouchPhaseStationary;
+
+    // `_location`, `_previousLocation`, `_lastUpdated`, `_lastUpdatedTime`, `_uuid` and
+    // `_identity` are all left exactly as they are. The step across the gap is real finger
+    // movement and the code downstream is entitled to see it.
+}
+
 
 - (void)setPhase:(NSTouchPhase)phase {
     _previousPhase = _phase;

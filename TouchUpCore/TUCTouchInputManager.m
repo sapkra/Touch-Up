@@ -501,10 +501,14 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     // In a stable order. `activeTouches` is a set, so the order it hands back can differ
     // from one report to the next, and contacts changing places mid-gesture is not
     // something a device would ever do.
+    // Ordered by our own identity rather than the panel's contact ID. A panel that renumbers
+    // a contact mid-gesture would otherwise reorder the fingers underneath macOS, which sees
+    // one leave and another arrive and starts the gesture again — the very fault the identity
+    // repair exists to prevent, moved from the real panel to the virtual one.
     NSArray<TUCTouch *> *contributing =
         [touches sortedArrayUsingComparator:^NSComparisonResult(TUCTouch *a, TUCTouch *b) {
-            if (a.contactID == b.contactID) return NSOrderedSame;
-            return a.contactID < b.contactID ? NSOrderedAscending : NSOrderedDescending;
+            if (a.identity == b.identity) return NSOrderedSame;
+            return a.identity < b.identity ? NSOrderedAscending : NSOrderedDescending;
         }];
     if (contributing.count > 4) {
         contributing = [contributing subarrayWithRange:NSMakeRange(0, 4)];
@@ -582,7 +586,9 @@ static NSString *TUCNameForAction(TUCCursorAction action) {
     for (NSUInteger i = 0; i < contributing.count; i++) {
         contacts[count].x = 0.5 + (travelMMx + offsetsMM[i].x) / kVirtualPadWidthMM;
         contacts[count].y = 0.5 + (travelMMy + offsetsMM[i].y) / kVirtualPadHeightMM;
-        contacts[count].identifier = (uint8_t)((labs((long)contributing[i].contactID) % 15) + 1);
+        // Likewise: this is what macOS tracks a finger by, so it has to survive the panel
+        // changing its mind about which contact number this finger is.
+        contacts[count].identifier = (uint8_t)((contributing[i].identity % 15) + 1);
         count++;
     }
 
@@ -2131,20 +2137,39 @@ static const CGFloat kSurfaceProbeStaleDistance = 10.0;
     //    }
     
     if (instantDeletion) {
+        [touch invalidatePendingRemoval];
         [[self touchSet] removeObject:touch];
         [[self delegate] touchesDidChange];
         return;
     }
-    
+
+    // Retire whatever was scheduled before. The reaper can reach a touch that has already
+    // ended and schedule a second removal for it, and two timers racing over one object is
+    // not something to leave lying around now that a touch can outlive one of them.
+    [touch invalidatePendingRemoval];
+    NSUInteger generation = touch.removalGeneration;
+
+    // Weak, because `touchSet` is the only owner and the touch may be long gone by the time
+    // this fires. Holding it here would keep a dead finger alive for half a second.
     __weak id weakSelf = self;
-    NSUUID *uuid = touch.uuid;
+    __weak TUCTouch *doomed = touch;
+
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC / 2), dispatch_get_main_queue(), ^{
-        for(TUCTouch *touch in [weakSelf touchSet]) {
-            if (touch.uuid == uuid && [[weakSelf touchSet] containsObject:touch]) {
-                [[weakSelf touchSet] removeObject:touch];
-                [[weakSelf delegate] touchesDidChange];
-                return;
-            }
+        TUCTouch *stillThere = doomed;
+        if (stillThere == nil) {
+            return;
+        }
+
+        // The one way to call off a dispatch_after: the touch says whether this block still
+        // speaks for it. A touch resumed under a new contact ID has moved on, and deleting
+        // it here would take a finger that is currently on the glass.
+        if (stillThere.removalGeneration != generation) {
+            return;
+        }
+
+        if ([[weakSelf touchSet] containsObject:stillThere]) {
+            [[weakSelf touchSet] removeObject:stillThere];
+            [[weakSelf delegate] touchesDidChange];
         }
     });
 }
